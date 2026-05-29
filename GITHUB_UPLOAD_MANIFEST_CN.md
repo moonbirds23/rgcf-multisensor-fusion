@@ -1,0 +1,32 @@
+# GitHub 上传保留清单
+
+本目录已按“重要代码 + 主要实验最新结果”清理。
+
+建议上传：
+
+```text
+README.md
+WEB_HANDOFF_PROJECT_ANALYSIS_CN.md
+GITHUB_UPLOAD_MANIFEST_CN.md
+project_root/
+```
+
+建议保留的结果目录：
+
+```text
+project_root/results/rgcf_main_ablation_summary/
+project_root/results/20260510_125659__train__hetero_robust_matrix_mixed_v2_rgcf__hetero_4sensor_scene__post_meas_soft_gate_fusion/
+project_root/results/20260509_225528__train__hetero_robust_matrix_mixed_dual_stream_plain_gnn__hetero_4sensor_scene__post_meas_direct_fusion/
+project_root/results/20260509_224017__train__hetero_robust_matrix_mixed_post_only_gnn__hetero_4sensor_scene__original_gnn_fusion/
+project_root/results/20260508_125952__train__hetero_window_pollution_v2_rgcf__hetero_4sensor_scene__post_meas_soft_gate_fusion/
+project_root/results/20260507_223436__train__clean_v2_post_meas_softgate__default_clean_4sensor_scene__post_meas_soft_gate_fusion/
+```
+
+不建议上传：
+
+```text
+_archive_local_only*/
+project_root/sim_cache/
+project_root/dataset_store/*/
+project_root/results/**/checkpoints/*.pt
+```

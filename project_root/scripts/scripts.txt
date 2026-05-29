@@ -1,0 +1,124 @@
+NF-DKF unified command examples
+================================
+
+一、单次 simulate
+--------------------------------
+
+1) clean baseline simulate
+python main.py --mode simulate --preset clean_baseline
+
+2) drop only simulate
+python main.py --mode simulate --preset drop_only
+
+3) pollution only simulate
+python main.py --mode simulate --preset pollution_only
+
+4) both faults simulate
+python main.py --mode simulate --preset both_faults
+
+
+二、单次 clean baseline 训练
+--------------------------------
+
+1) 默认 clean baseline 训练
+python main.py --mode train --preset clean_baseline --epochs 80 --device cpu --lr 1e-3 --batch_size 64 --hidden_dim 64
+
+2) 自定义实验名
+python main.py --mode train --preset clean_baseline --epochs 80 --experiment_name clean_baseline_runA
+
+
+三、repeat 训练
+--------------------------------
+
+1) clean baseline repeat 5 次
+python main.py --mode repeat --preset clean_baseline --epochs 40 --repeat_runs 5
+
+2) clean baseline repeat 10 次
+python main.py --mode repeat --preset clean_baseline --epochs 80 --repeat_runs 10
+
+
+四、clean train -> fault test
+--------------------------------
+
+说明：
+- train_bundle 应保持 clean_baseline
+- test_bundle 可指定为 drop_only / pollution_only / both_faults
+
+1) clean train -> drop test
+python main.py --mode fault_test --train_preset clean_baseline --test_preset drop_only --epochs 80
+
+2) clean train -> pollution test
+python main.py --mode fault_test --train_preset clean_baseline --test_preset pollution_only --epochs 80
+
+3) clean train -> both test
+python main.py --mode fault_test --train_preset clean_baseline --test_preset both_faults --epochs 80
+
+4) 也可用 --fault_mode 简化指定（若不写 --test_preset）
+python main.py --mode fault_test --train_preset clean_baseline --fault_mode drop --epochs 80
+python main.py --mode fault_test --train_preset clean_baseline --fault_mode pollution --epochs 80
+python main.py --mode fault_test --train_preset clean_baseline --fault_mode both --epochs 80
+
+
+五、轨迹/场景泛化测试
+--------------------------------
+说明：
+- 当前建议 train/test 都保持 clean
+- 区别主要在 preset 对应的 scene
+
+1) default clean scene -> wide baseline clean scene
+python main.py --mode generalization_test --train_preset clean_baseline --test_preset wide_baseline_clean --epochs 80
+
+2) default clean scene -> asymmetric clean scene
+python main.py --mode generalization_test --train_preset clean_baseline --test_preset asymmetric_clean --epochs 80
+
+
+六、未来扩展预留
+--------------------------------
+
+1) dual-stream / meas-stream 未来入口示意
+python main.py --mode train --preset clean_baseline --hidden_dim 64
+
+2) gate / reliability 未来入口示意
+python main.py --mode train --preset clean_baseline --hidden_dim 64
+
+说明：
+- 当前 Step 10 不直接通过命令切换 dual-stream / gate
+- 这些选项等 Step 12/13/14 完成后，再扩展到命令层
+
+
+七、当前建议的最常用命令
+--------------------------------
+
+1) 建立 clean baseline
+python main.py --mode train --preset clean_baseline --epochs 80
+
+2) 做 baseline repeat
+python main.py --mode repeat --preset clean_baseline --epochs 40 --repeat_runs 5
+
+3) 做 clean train -> drop test
+python main.py --mode fault_test --train_preset clean_baseline --test_preset drop_only --epochs 80
+
+4) 做 clean train -> pollution test
+python main.py --mode fault_test --train_preset clean_baseline --test_preset pollution_only --epochs 80
+
+python main.py --mode generate_dataset --preset clean_baseline --dataset_note formal_v1
+python main.py --mode train --preset clean_baseline --epochs 2 --use_latest_matching_dataset
+
+5) 数据库的使用
+python main.py --mode train --preset clean_v1_post_meas_direct --dataset_id 20260320_012714__clean_v2_post_meas_softgate__clean_v2_post_meas_softgate__default_clean_4sensor_scene__clean__tr10-69__va70-79__te80-89__v2_repeat80_clean
+
+6）
+生成一个带时间戳的唯一 dataset_note
+用 clean_v1_post_meas_direct 生成新的 V1 raw sim dataset store
+从 dataset_store/ 中找到刚生成的那一套 dataset
+显式把这个 dataset_id 传给 train
+训练 80 个 epoch
+训练结果自动保存到新的 results/ 目录，不会覆盖旧实验。
+$note="v1_formal_$(Get-Date -Format 'yyyyMMdd_HHmmss')"; python main.py --mode generate_dataset --preset clean_v1_post_meas_direct --dataset_note $note; $ds=(Get-ChildItem .\dataset_store -Directory | Where-Object { $_.Name -like "*clean_v1_post_meas_direct*" -and $_.Name -like "*$note*" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name; python main.py --mode train --preset clean_v1_post_meas_direct --epochs 80 --dataset_id $ds --experiment_name v1_formal_run
+
+python main.py --mode generate_dataset --preset clean_v2_post_meas_softgate --dataset_note v2_repeat80_clean
+python main.py --mode repeat --preset clean_v2_post_meas_softgate --repeat_runs 10 --epochs 80 --use_latest_matching_dataset
+python main.py --mode repeat --preset clean_v1_post_meas_softgate --repeat_runs 10 --epochs 80 --use_latest_matching_dataset
+
+python main.py --mode train --preset clean_baseline_v0 --epochs 80 --20260319_001837__clean_baseline__clean_baseline__default_clean_4sensor_scene__clean__tr10-49__va60-69__te80-89__formal_v1--experiment_name cmp_v0_clean
+python main.py --mode train --preset clean_baseline_v0 --epochs 80 --dataset_dir "<DATASET_DIR>" --experiment_name cmp_v0_clean

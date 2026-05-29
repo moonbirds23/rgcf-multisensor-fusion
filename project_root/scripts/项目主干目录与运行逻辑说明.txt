@@ -1,0 +1,774 @@
+下面给你一份**可直接覆盖旧版《项目主干目录与运行逻辑说明.txt》**的新文字版。
+这版已经把我们这几轮确认过的改动都合进去了，重点修正了旧说明里容易误导后续问答的地方，尤其是：
+
+* `train` 不再默认现场生成 sims，而是**优先从 `dataset_store/` 读取数据集仓库**
+* `generate_dataset` 已经成为正式入口
+* `main.py` 的五类实验模式已经接入 `ResultManager` 做统一落盘
+* `repeat` 现在要区分**固定数据集重复训练**和**shifted dataset repeat** 两种语义
+* `--use_latest_matching_dataset` 的自动匹配里，**不应再把 `experiment_name` 作为硬匹配条件**
+* 当前 `repeat` 更适合作为 **Monte Carlo V0/V1 壳层**，但不是最终完全体
+
+这版的总体结构仍然遵循你之前的重构目标：配置层、配置装配器、仿真层、特征层、模型层、训练层、实验层、主入口层和统一结果落盘层。
+
+---
+
+# NF-DKF 融合分支：当前项目目录与运行逻辑说明（更新覆盖版）
+
+## 一、项目当前定位
+
+当前分支继续聚焦 **NF-DKF 的融合层**，不扩展到完整滤波框架的全面重构。当前主线仍然是：
+
+1. 先稳定 **clean original baseline**
+2. 再做 **clean train / repeat / Monte Carlo**
+3. 再做 **fault test**
+4. 再做 **轨迹族泛化 / generalization**
+5. 再做 **meas-stream**
+6. 再做 **gate**
+7. 最后再考虑 **learned reliability**
+
+其中，当前 `original` 默认理解为：
+以 EKF 后验特征为主的统一节点融合器，输入核心为 `xhat / diag(P) / valid`，本质上属于**后验状态级融合器**，不是直接利用原始量测异构性的融合器。当前 `clean` 默认理解为：无显式 `dropout`、无显式 `pollution / jump bias`，但仍保留多传感器异构性。当前 `fault test` 默认理解为：**clean baseline 训练完成之后**，再在测试阶段引入 `dropout / pollution / both`。这些定义与之前的主干说明、重构步骤和实验推进计划保持一致。
+
+---
+
+## 二、当前推荐目录结构（最新版）
+
+```text
+project_root/
+├─ main.py
+├─ configs/
+│  ├─ __init__.py
+│  ├─ base_config.py
+│  ├─ scenario_config.py
+│  ├─ fault_config.py
+│  ├─ model_config.py
+│  ├─ train_config.py
+│  └─ experiment_presets.py
+├─ core/
+│  ├─ __init__.py
+│  ├─ types.py
+│  ├─ config_loader.py
+│  ├─ registry.py
+│  ├─ io_utils.py
+│  └─ result_manager.py
+├─ simulation/
+│  ├─ __init__.py
+│  ├─ trajectory.py
+│  ├─ sensor_layouts.py
+│  ├─ scenarios.py
+│  ├─ scenario_factory.py
+│  ├─ sensors.py
+│  ├─ sensor_factory.py
+│  ├─ measurement_models.py
+│  ├─ ekf.py
+│  ├─ fusion_baselines.py
+│  ├─ runner.py
+│  └─ faults/
+│     ├─ __init__.py
+│     ├─ base_fault.py
+│     ├─ dropout_fault.py
+│     ├─ pollution_fault.py
+│     └─ fault_manager.py
+├─ features/
+│  ├─ __init__.py
+│  ├─ post_features.py
+│  ├─ meas_features.py
+│  ├─ builders.py
+│  └─ dataset.py
+├─ models/
+│  ├─ __init__.py
+│  ├─ base_fusion.py
+│  ├─ gnn_fusion.py
+│  └─ model_factory.py
+├─ training/
+│  ├─ __init__.py
+│  ├─ losses.py
+│  ├─ evaluator.py
+│  ├─ trainer.py
+│  └─ repeat_runner.py
+├─ experiments/
+│  ├─ __init__.py
+│  ├─ simulate.py
+│  ├─ generate_dataset.py
+│  ├─ train.py
+│  ├─ fault_test.py
+│  └─ generalization_test.py
+├─ data/
+│  ├─ __init__.py
+│  └─ dataset_store.py
+├─ dataset_store/
+├─ results/
+├─ scripts/
+│  └─ run_commands.txt
+├─ readme.txt
+├─ 代码重构-3.18.txt
+├─ 项目主干目录与运行逻辑说明.txt
+└─ legacy_nf_dkf_clean_reference.py
+```
+
+这套目录仍然对应之前定义的 Step 1 到 Step 11 主骨架：配置层、配置装配器、场景层、故障插件层、仿真与 baseline 层、特征层、模型层、训练层、实验层、主入口层和统一结果落盘层。当前相较旧说明，新增且必须显式纳入的是：
+
+* `experiments/generate_dataset.py`
+* `data/dataset_store.py`
+* `dataset_store/`
+
+因为训练流程已经从“现场构造数据集”切换为“**先生成 dataset store，再从本地读取训练**”。
+
+---
+
+## 三、各目录职责说明（按当前真实实现更新）
+
+### 1. `configs/`
+
+负责集中管理所有实验参数，不再在主文件中散改参数。
+主要包括：
+
+* `base_config.py`：运行设备、结果保存根目录等基础配置
+* `scenario_config.py`：轨迹、传感器布局、nominal noise、feature scale
+* `fault_config.py`：`dropout / pollution / both` 等故障配置
+* `model_config.py`：模型名、hidden_dim、post/meas stream 开关等
+* `train_config.py`：`epochs / lr / batch_size / train-val-test seed 区间 / repeat_seed_stride`
+* `experiment_presets.py`：`clean_baseline / drop_only / pollution_only / both_faults` 等 preset
+
+设计目的仍然是：**调实验主要改 config，而不是直接改主逻辑**。
+
+---
+
+### 2. `core/`
+
+负责全局类型、配置装配、注册表和统一结果保存。
+主要包括：
+
+* `types.py`：统一定义 `RunRequest / ExperimentBundle / Identity` 等结构
+* `config_loader.py`：将命令行请求或 preset 装配成 bundle
+* `registry.py`：管理场景、模型、fault 等注册
+* `io_utils.py`：底层 `json/csv/npz/checkpoint` 保存工具
+* `result_manager.py`：统一创建结果目录并保存 `summary / history / metrics / artifacts / checkpoints / logs`
+
+当前这一层的职责非常关键：**配置 -> 实验对象 -> 结果落盘** 已经是一条统一流程。重构文档也明确要求结果目录带时间、模式、preset、scene、model，并且不可覆盖。
+
+---
+
+### 3. `simulation/`
+
+负责物理仿真主干。可分为四块：
+
+#### （1）场景层
+
+* `trajectory.py`：truth trajectory 生成
+* `sensor_layouts.py`：传感器布局模板
+* `scenarios.py`：场景类定义
+* `scenario_factory.py`：根据 bundle 构造场景实例
+
+#### （2）传感器与故障层
+
+* `sensors.py`：nominal sensor measurement
+* `sensor_factory.py`：从场景配置构造传感器
+* `faults/*.py`：fault 插件体系
+* `fault_manager.py`：统一调度多个故障插件
+
+#### （3）测量模型与局部滤波层
+
+* `measurement_models.py`：`h(x)` 和 Jacobian
+* `ekf.py`：局部 CV-EKF
+* `fusion_baselines.py`：`AVG / CI-chain / CI-multi / best-single` 等 baseline
+
+#### （4）rollout 主循环
+
+* `runner.py`：统一单次 rollout 入口，输出 `sim`
+
+这一层仍然是后续 post-stream、meas-stream 和 temporal 设计的统一数据来源。
+
+---
+
+### 4. `features/`
+
+负责把仿真输出转成模型输入。
+主要包括：
+
+* `post_features.py`：当前主干使用的后验状态流特征
+* `meas_features.py`：量测异构流接口预留
+* `builders.py`：统一组合 `post / meas` 特征
+* `dataset.py`：构造成 PyTorch Dataset
+
+当前默认仍然是 **post-stream 主导**，`meas-stream` 只做接口预留，后续再正式启用。
+
+---
+
+### 5. `models/`
+
+负责统一融合模型接口。
+主要包括：
+
+* `base_fusion.py`
+* `gnn_fusion.py`
+* `model_factory.py`
+
+当前 `OriginalGNNFusion` 仍然是标准 baseline 模块，但主创新方向**不绑定某种特定 backbone**。当前 GNN 更像一个节点级汇聚器 / 动态加权器，而不是后续研究的唯一创新点。
+
+---
+
+### 6. `data/` 与 `dataset_store/`
+
+这是这次更新中**必须新增说明**的一层。
+
+#### `data/dataset_store.py`
+
+负责：
+
+* 生成 dataset store 目录 ID
+* 保存 `train_sims / val_sims / test_sims / quick_sim`
+* 写入 `meta.json`
+* 按 `dataset_id` 或自动匹配规则查找已有 dataset store
+* 从本地仓库加载 raw sims
+
+#### `dataset_store/`
+
+负责保存已经生成好的训练数据仓库。
+当前训练不再默认现场重建 train/val/test sims，而是：
+
+1. 先通过 `generate_dataset` 生成数据集仓库
+2. 再在 `train / repeat / fault_test / generalization_test` 中读取已有 dataset
+
+这一步是当前运行逻辑与旧版说明最大的不同点之一。旧说明中 “train 模式由 trainer 直接生成多个 sims” 的描述，**现在不再是默认真实语义**，应视为过时描述。
+
+---
+
+### 7. `training/`
+
+负责训练、评估与 repeat。
+主要包括：
+
+* `losses.py`
+* `evaluator.py`
+* `trainer.py`
+* `repeat_runner.py`
+
+当前默认损失仍是：
+
+[
+loss = loss_{pos} + 0.2 \cdot loss_{vel}
+]
+
+这和实验推进计划中的默认损失设定保持一致。
+
+但训练逻辑已经更新为：
+
+* `trainer.py` **优先从 dataset_store 读取 train/val/test sims**
+* 不再默认“现场 build sims 再训练”
+* 训练入口必须提供三选一：
+
+  * `dataset_dir`
+  * `dataset_id`
+  * `use_latest_matching_dataset=True`
+
+也就是说，当前 `trainer.py` 的真实职责是：
+**读取本地数据集仓库 -> 构造 dataset -> 训练模型 -> 评估 -> 返回结果对象**。
+
+---
+
+### 8. `experiments/`
+
+负责把科研问题组织成正式实验入口。
+当前主要包括：
+
+* `simulate.py`
+* `generate_dataset.py`
+* `train.py`
+* `fault_test.py`
+* `generalization_test.py`
+
+后续还会扩展：
+
+* `measstream_test.py`
+* `gate_ablation.py`
+* temporal 相关实验入口
+
+这一层的作用依然是：**每个科研问题都有独立实验壳层，而不是散落在主脚本里**。
+
+---
+
+### 9. `results/`
+
+统一保存实验结果。
+目录名带：
+
+* 时间戳
+* mode
+* preset
+* scene
+* model
+
+且不可覆盖。任何新实验都必须落到统一结果目录中，不允许覆盖上次结果。
+
+当前已经明确：`main.py` 中的五类主要模式都应接入 `ResultManager` 统一保存。
+
+---
+
+## 四、运行方式约定
+
+当前工程默认采用**脚本模式运行**，不是 `python -m project_root.main` 包模式。
+因此推荐统一写成：
+
+```python
+from configs.xxx import ...
+from core.xxx import ...
+from simulation.xxx import ...
+from features.xxx import ...
+from models.xxx import ...
+from training.xxx import ...
+from experiments.xxx import ...
+from data.xxx import ...
+```
+
+不应继续残留：
+
+```python
+from project_root.configs.xxx import ...
+```
+
+否则在 `project_root` 根目录直接运行时，容易触发 `ModuleNotFoundError`。这一点与旧说明一致，仍然有效。
+
+---
+
+## 五、当前主入口 `main.py` 的真实运行逻辑（更新版）
+
+新的 `main.py` 负责四件事，而不再只是旧说明中的三件事：
+
+### 1. 解析命令行参数
+
+典型参数包括：
+
+* `--mode`
+* `--preset`
+* `--train_preset`
+* `--test_preset`
+* `--fault_mode`
+* `--epochs`
+* `--device`
+* `--lr`
+* `--batch_size`
+* `--hidden_dim`
+* `--repeat_runs`
+* `--experiment_name`
+* `--dataset_store_root`
+* `--dataset_note`
+* `--dataset_id`
+* `--dataset_dir`
+* `--use_latest_matching_dataset`
+
+### 2. 把命令行参数装配成 `RunRequest` 和 `ExperimentBundle`
+
+这一步由 `core/config_loader.py` 完成。
+
+### 3. 把 bundle 分发到 experiments / training 层
+
+例如：
+
+* `mode=simulate` -> `experiments/simulate.py`
+* `mode=generate_dataset` -> `experiments/generate_dataset.py`
+* `mode=train` -> `experiments/train.py`
+* `mode=repeat` -> `training/repeat_runner.py`
+* `mode=fault_test` -> `experiments/fault_test.py`
+* `mode=generalization_test` -> `experiments/generalization_test.py`
+
+### 4. 调用 `ResultManager` 统一落盘
+
+这是当前和旧版主说明相比最关键的补全：
+**simulate / train / repeat / fault_test / generalization_test** 都应在主入口层接入 `ResultManager`，统一保存 `summary/history/metrics/artifacts/checkpoints/logs`。这也正是 Step 10 与 Step 11 的职责定义。
+
+---
+
+## 六、六类实验模式的更新版执行逻辑
+
+### 1. `simulate`
+
+命令示例：
+
+```bash
+python main.py --mode simulate --preset clean_baseline
+```
+
+逻辑流程：
+
+1. 从 preset 构造 bundle
+2. `scenario_factory` 构造场景
+3. `sensor_factory` 构造 nominal 传感器
+4. `fault_manager` 决定是否开启 `dropout / pollution`
+5. `runner` 执行单次 rollout
+6. `fusion_baselines` 计算 baseline 指标
+7. `ResultManager` 保存：
+
+   * `summary/sim_summary.json`
+   * `metrics/baseline_metrics.json`
+   * `logs/fault_logs.json`
+   * `artifacts/sim_arrays.npz`
+
+适用场景：
+
+* 检查 `clean / drop / pollution / both` 的仿真设置是否正常
+* 为后续绘图准备基础数据
+
+这一点与旧版运行逻辑基本一致，只是现在保存链已经正式接回 `ResultManager`。
+
+---
+
+### 2. `generate_dataset`
+
+命令示例：
+
+```bash
+python main.py --mode generate_dataset --preset clean_baseline --dataset_note formal_v1
+```
+
+逻辑流程：
+
+1. 从 preset 构造 bundle
+2. 按 train/val/test seed 区间生成对应 sims
+3. 可附带保存一份 `quick_sim`
+4. 调用 `data/dataset_store.py` 保存到 `dataset_store/`
+5. 写入：
+
+   * `meta.json`
+   * `train_sims.pkl`
+   * `val_sims.pkl`
+   * `test_sims.pkl`
+   * 可选 `quick_sim.pkl`
+
+当前这是训练前的正式准备步骤。
+**训练不再默认直接造数据，而是优先读取这里生成的数据仓库。**
+
+---
+
+### 3. `train`
+
+命令示例：
+
+```bash
+python main.py --mode train --preset clean_baseline --epochs 80 --dataset_dir "dataset_store/..."
+```
+
+或：
+
+```bash
+python main.py --mode train --preset clean_baseline --epochs 80 --use_latest_matching_dataset
+```
+
+更新后的真实逻辑：
+
+1. 从 preset 构造 train bundle
+2. 按以下优先级确定数据来源：
+
+   * 若给了 `dataset_dir`，直接读取指定目录
+   * 否则若给了 `dataset_id`，按 ID 查找
+   * 否则若 `use_latest_matching_dataset=True`，按 bundle 自动匹配最新 dataset
+   * 否则报错
+3. 从 dataset store 读取 `train_sims / val_sims / test_sims`
+4. `features` 构造 dataset
+5. `model_factory` 构造 `OriginalGNNFusion`
+6. 开始训练，默认：
+
+   * Adam
+   * ReduceLROnPlateau
+   * grad clip
+   * early stop
+7. 用 best val model 做 test eval
+8. 在一个固定 quick sim 上额外计算：
+
+   * `quick_baseline_metrics`
+   * `quick_gnn_metrics`
+9. `ResultManager` 保存：
+
+   * `summary/training_summary.json`
+   * `history/train_history.csv`
+   * `metrics/quick_baseline_metrics.json`
+   * `metrics/quick_gnn_metrics.json`
+   * `artifacts/sim_arrays.npz`
+   * `checkpoints/best_model.pt`
+
+**注意：旧说明里“trainer 直接根据 seed ranges 生成多个 sim”这句，现已不再是当前默认实现。**
+
+---
+
+### 4. `repeat`
+
+命令示例（固定数据集模式）：
+
+```bash
+python main.py --mode repeat --preset clean_baseline --repeat_runs 10 --dataset_dir "dataset_store/..."
+```
+
+命令示例（自动匹配/多数据集模式）：
+
+```bash
+python main.py --mode repeat --preset clean_baseline --repeat_runs 10 --use_latest_matching_dataset
+```
+
+当前 `repeat` 的真实语义必须区分为两种：
+
+#### A. 固定数据集重复训练
+
+触发条件：
+
+* 显式给了 `dataset_dir`
+* 或显式给了 `dataset_id`
+
+行为：
+
+* 所有轮使用同一份 dataset
+* 不再做 seed ranges shift
+* 测的是**训练稳定性 / 初始化波动**
+
+#### B. shifted dataset repeat
+
+触发条件：
+
+* `use_latest_matching_dataset=True`
+* 且每轮都有能匹配到的对应 dataset store
+
+行为：
+
+* 每轮对 train/val/test seed 区间整体平移
+* 再按 shifted bundle 去匹配数据集
+* 测的是**多 seed 数据扰动下的稳定性**
+
+每轮训练完成后，仍会在固定展示 sim 上做 quick eval。
+最终应保存：
+
+* `summary/repeat_summary.json`
+* `history/repeat_runs.csv`
+
+其中 `repeat_runs.csv` 至少应包含：
+
+* `run_idx`
+* `seed_offset`
+* `best_val_loss`
+* `test_loss`
+* `best_epoch`
+* `rmse_gnn_pos`
+* `rmse_gnn_full`
+* 若有则包含 `mean_w_s1...mean_w_s4`
+
+### 当前对 `repeat` 的默认理解
+
+当前 `repeat` 已经很适合做 **Monte Carlo V0/V1 壳层**，尤其适合：
+
+* fixed-dataset Monte Carlo：测试训练波动
+* shifted-dataset Monte Carlo：测试数据采样波动
+
+但它还不是最终完全体。若后续要做论文级 Monte Carlo，建议再单独升级成 `monte_carlo_runner.py` 或正式 `monte_carlo_test.py`。这一步是本轮更新中新增的默认理解。旧重构文档把 repeat 视为多次独立训练与统计入口，这个方向仍然成立。
+
+---
+
+### 5. `fault_test`
+
+命令示例：
+
+```bash
+python main.py --mode fault_test --train_preset clean_baseline --test_preset drop_only --dataset_dir "dataset_store/..."
+```
+
+默认逻辑：
+
+1. `train_bundle` 使用 clean preset
+2. `test_bundle` 使用 `drop_only / pollution_only / both_faults`
+3. 训练阶段按当前训练逻辑读取 dataset store
+4. 训练完成后：
+
+   * 在 clean quick sim 上评估
+   * 在 fault quick sim 上评估
+5. `ResultManager` 保存：
+
+   * `summary/fault_test_summary.json`
+   * `history/train_history.csv`
+   * `metrics/clean_quick_metrics.json`
+   * `metrics/fault_quick_metrics.json`
+   * `metrics/clean_baseline_metrics.json`
+   * `metrics/fault_baseline_metrics.json`
+   * `artifacts/clean_quick_sim_arrays.npz`
+   * `artifacts/fault_quick_sim_arrays.npz`
+   * `checkpoints/best_model.pt`
+
+这一模式的默认研究意义仍然是：
+**评估 clean training baseline 的故障外推能力**，而不是回到旧 fault-training 代码上继续堆结构。
+
+---
+
+### 6. `generalization_test`
+
+命令示例：
+
+```bash
+python main.py --mode generalization_test --train_preset clean_baseline --test_preset another_scene_preset --dataset_dir "dataset_store/..."
+```
+
+默认逻辑：
+
+1. `train_bundle` 对应训练域
+2. `test_bundle` 对应测试域 / 测试场景
+3. 训练阶段按当前训练逻辑读取 dataset store
+4. 训练完成后分别在：
+
+   * train-domain quick sim
+   * test-domain quick sim
+     上评估
+5. `ResultManager` 保存：
+
+   * `summary/generalization_summary.json`
+   * `history/train_history.csv`
+   * `metrics/train_domain_quick_metrics.json`
+   * `metrics/test_domain_quick_metrics.json`
+   * `metrics/train_domain_baseline_metrics.json`
+   * `metrics/test_domain_baseline_metrics.json`
+   * `artifacts/train_domain_sim_arrays.npz`
+   * `artifacts/test_domain_sim_arrays.npz`
+   * `checkpoints/best_model.pt`
+
+当前默认理解仍然是：
+**先稳定 clean baseline，再做轨迹族/域泛化**。
+
+---
+
+## 七、关于 `dataset_store` 自动匹配的更新说明
+
+这是本次新增的重要约定，必须写清楚，避免后续反复误判。
+
+### 当前自动匹配应以这些字段为主
+
+* `preset_name`
+* `scene_name`
+* `fault_mode`
+* `train_seed_start / end`
+* `val_seed_start / end`
+* `test_seed_start / end`
+* 必要时 `fault_detail`
+* 必要时 `feature_version`
+
+### 当前默认不应再把 `experiment_name` 作为硬匹配条件
+
+原因很简单：
+
+* `experiment_name` 更像运行别名，例如 `train_smoke / repeat_smoke / fault_debug`
+* 它不应决定数据集本体是否可复用
+* 如果把它作为硬条件，会导致：
+
+  * 生成数据集时 `experiment_name=clean_baseline`
+  * 训练时 `experiment_name=train_smoke`
+  * 虽然底层数据配置相同，却无法自动匹配到同一份 dataset store
+
+因此，后续默认理解应是：
+
+> `experiment_name` 服务于结果命名与显示，不服务于 dataset identity 匹配。
+
+---
+
+## 八、结果保存的当前默认理解
+
+### 1. 所有正式模式都必须走统一结果目录
+
+* `simulate`
+* `train`
+* `repeat`
+* `fault_test`
+* `generalization_test`
+
+### 2. `ResultManager` 是统一保存入口
+
+负责创建：
+
+* `summary/`
+* `history/`
+* `metrics/`
+* `artifacts/`
+* `checkpoints/`
+* `logs/`
+
+### 3. 当前目录不可覆盖
+
+这是重构总原则之一，不允许因为重跑实验而覆盖旧结果。
+
+### 4. 关于 `repeat`
+
+当前最理想的设计仍然是：
+
+* 父目录
+* 子运行目录（每轮一个）
+
+但目前最小要求至少是：
+
+* `repeat_summary.json`
+* `repeat_runs.csv`
+
+也就是说，后续若继续加强 `repeat / Monte Carlo`，优先补的是“每轮子目录与详细 artifacts”，而不是先换 backbone。
+
+---
+
+## 九、当前研究与实现上的默认口令理解（更新版）
+
+后续若新开窗口，默认按以下方式理解：
+
+* **original**
+  指以 EKF 后验特征为主的统一节点融合器，当前以 clean 版本作为 baseline
+
+* **clean**
+  指无 `dropout`、无 `pollution`，但保留多传感器异构性
+
+* **generate_dataset**
+  指按当前 bundle 的 train/val/test seed 区间生成 dataset store
+
+* **train**
+  默认理解为：**从 dataset_store 读取数据进行训练**，不是现场生成数据
+
+* **repeat**
+  默认分两种：
+
+  * fixed-dataset repeat：固定数据集重复训练
+  * shifted-dataset repeat：多 seed 数据集重复训练
+    同时可作为 Monte Carlo 的 V0/V1 壳层
+
+* **fault test**
+  指 clean training baseline 之后进行的故障泛化测试
+
+* **generalization test**
+  指训练域和测试域不同的轨迹/场景泛化测试
+
+* **dual-stream / 双流**
+  指 `post-stream + meas-stream`，不是替代 EKF，而是在融合层补回量测异构信息
+
+* **gate**
+  默认优先理解为针对 `meas-stream` 的 soft gate，灵感来自 Selective Sensor Fusion，不替代 hard valid
+
+* **reliability / confidence**
+  默认理解为从 hand-crafted confidence 逐步走向 learned reliability，但不是当前第一优先级
+
+* **temporal**
+  默认理解为：在融合层显式引入短时历史，优先用于节点表示与 gate，而不是单纯输出平滑
+
+这些默认口令与实验推进计划保持一致。
+
+---
+
+## 十、当前明确不做的事（仍然有效）
+
+为了避免研究发散，当前阶段默认**不做**以下事情，除非后续明确重启：
+
+1. 不回到旧的 fault-training 单文件版本上继续堆新模块
+2. 不一开始就做“异构流 + gate + 时序 + 新损失”全家桶
+3. 不直接把 `hard valid` 完全替换成 learned variable
+4. 不直接把原始量测长历史序列大量堆入模型
+5. 不在没有稳定 clean baseline 的前提下讨论最终创新结论
+6. 不把“更换 backbone / 更换图网络模型”作为当前主要创新点
+
+这些约束的目的仍然是：**保证每一步能清楚归因，而不是把系统堆成难以解释的大黑箱。**
+
+---
+
+## 十一、一句话总口令（更新版）
+
+当前 NF-DKF 融合分支默认任务是：
+
+> 先把 clean original baseline 的工程结构、dataset store 流程、训练/重复实验和统一结果落盘稳定下来；训练默认从本地 dataset_store 读取；repeat 默认区分固定数据集重复训练与多 seed 数据集重复训练；在此基础上再逐步推进 fault test、轨迹泛化、meas-stream、gate 和 learned reliability。
+
+---
+
+如果你愿意，我下一条可以继续把这份内容**压缩成更短的 readme 版**，方便你直接覆盖 `readme.txt`。

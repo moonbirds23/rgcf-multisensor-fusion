@@ -1,0 +1,868 @@
+下面给你一份可直接复制为 **`V1实验推进记录.txt`** 的文字版。内容按“目标、代码改动、运行逻辑、dataset/database 变化、已验证结果、当前问题、后续接力建议”来组织，方便你后续在别的窗口直接对接。
+
+---
+
+# NF-DKF 融合分支：V1 实验推进记录（当前窗口总结）
+
+## 一、当前阶段定位
+
+本窗口的核心任务，是把项目从 **V0: post-only clean baseline** 往 **V1: post + meas 的 direct fusion** 推进一步，但严格遵守当前主线约束：
+
+1. 不破坏 V0 clean baseline
+2. V1 只验证 `meas-stream` 本身是否有价值
+3. 当前不加 `gate`
+4. 当前不加时间窗口 / temporal
+5. 当前不改 loss
+6. 当前不把更换 backbone 当创新重点
+
+这些约束与当前实验推进计划一致：V0 是零号基线；V1 的定义是正式引入 `meas-stream`，不加 gate、不加时间窗口，采用最简单的 direct dual-stream fusion，用来回答“量测异构流是否值得正式引入”。
+同时，当前项目主干也明确：主创新方向不优先押注 backbone，更关注 `meas-stream / soft gate / temporal-aware gate / reliability modelling`。
+
+---
+
+## 二、本窗口完成的总体工作
+
+本窗口没有去大改整个训练框架，而是围绕 **V1 最小闭环** 做了以下推进：
+
+1. 明确了 V1 的方法定位：
+   `post-stream + meas-stream`，先做 **direct fusion**，不加 gate、不加 temporal。
+2. 审查了当前 `post_features.py / meas_features.py / builders.py / dataset.py / trainer.py / model_config.py / model_factory.py / experiment_presets.py / runner.py` 的实际状态。
+3. 确认当前训练逻辑已经从“现场生成训练数据”切换为“先生成 `dataset_store`，再从本地读取训练”。这一步是当前运行逻辑相较旧版最重要的变化之一。
+4. 将 V1 的关键改动集中在：
+
+   * `simulation/runner.py`
+   * `features/meas_features.py`
+   * `configs/model_config.py`
+   * `models/gnn_fusion.py`
+   * `models/model_factory.py`
+   * `configs/experiment_presets.py`
+5. 成功打通了 **V1 simulate 入口**，命令 `python main.py --mode simulate --preset clean_v1_post_meas_direct` 已经能正常运行并保存结果。
+6. 同时识别出：**旧的 V0 dataset store 不能直接用于当前 V1 训练**，因为旧 raw sim schema 中缺少 `xpred` 等 V1 需要的字段，训练时已实测报错 `KeyError: 'xpred'`。
+
+---
+
+## 三、V1 的方法定义（本窗口最终统一口径）
+
+当前对 V1 的统一理解如下：
+
+### 1. V0
+
+* 模型：`OriginalGNNFusion`
+* 输入：仅 `post-stream`
+* 特征核心：`xhat / diag(P) / valid`
+* 本质：后验状态级融合器
+* 不加 meas-stream
+* 不加 gate
+* 不加 temporal
+
+### 2. V1
+
+* 模型：`PostMeasDirectFusion`
+* 输入：`post-stream + meas-stream`
+* 做法：最简单的 direct dual-stream fusion
+* 不加 gate
+* 不加 temporal
+* 不改 loss
+* 目标：验证 `meas-stream` 是否有独立价值
+
+这与项目文档一致：当前 original 的主要瓶颈在于它主要依赖 EKF 后验特征，因此更像“后验状态级融合器”，而不是“直接感知量测异构性和量测可靠性的融合器”；因此后续必须引入 `meas-stream`。
+
+---
+
+## 四、当前项目运行逻辑的关键更新（必须保留给后续窗口）
+
+### 1. 训练流程已经不是旧语义
+
+当前真实逻辑是：
+
+1. 先通过 `generate_dataset` 生成 `dataset_store`
+2. `dataset_store` 中保存 `train_sims / val_sims / test_sims / quick_sim`
+3. 训练时从本地读取 `dataset_store`
+4. 再动态从 `sim` 构造 `FeatureBundle`
+5. 再由 `FusionTimeStepDataset` 构造 PyTorch Dataset
+
+也就是说，当前 `dataset_store/` 保存的是 **raw sim store**，而不是已经切好的 feature tensor。
+这是当前运行逻辑和旧描述最大的差异之一，文档中已经明确指出这一点。
+
+### 2. features 层当前真实职责
+
+当前目录说明中，`features/` 的职责是：
+
+* `post_features.py`：后验状态流特征
+* `meas_features.py`：量测异构流
+* `builders.py`：统一组合 `post / meas`
+* `dataset.py`：构造成 PyTorch Dataset
+
+原说明里 `meas-stream` 还是接口预留，但本窗口推进的是把它真正变成 V1 的正式输入流。
+
+---
+
+## 五、本窗口涉及的具体代码改动（按文件说明）
+
+下面是本窗口已经讨论并建议落地的代码层修改。这里按“目标、原状态、改后状态”来说明。
+
+---
+
+### A. `simulation/runner.py`
+
+#### 原状态
+
+旧版 `runner.py` 在一次 rollout 中主要记录：
+
+* `xhat`
+* `Phat`
+* `valid_mask`
+* `z_store`
+* `R_store`
+
+这与项目说明中的 runner 标准输出一致。
+
+#### V1 改动目标
+
+为了支撑标准的 `meas-stream`，仅有 `z_store / R_store` 不够，需要把 **update 前的预测统计量** 也记录下来，用于构造：
+
+* innovation / residual
+* whitened innovation
+* NIS
+* measurement geometry
+* sensor type/meta
+
+#### 本窗口建议/已实施的新增字段
+
+在 `sim` 中新增以下字段：
+
+* `xpred`：预测状态 `[K, N, 4]`
+* `Ppred`：预测协方差 `[K, N, 4, 4]`
+* `zpred_store`
+* `innovation_store`
+* `S_store`
+* `Sdiag_store`
+* `nis_store`
+* `sensor_type_codes`
+* `sensor_type_names`
+* `sensor_pos`
+
+#### 逻辑说明
+
+在每个时间步、每个 sensor 上，流程改为：
+
+1. `st_pred = ekf.predict(...)`
+2. 生成 nominal measurement
+3. fault 注入得到 `z_fin / R_fin / valid_fin`
+4. 若有效，则：
+
+   * 计算 `z_pred`
+   * 计算 innovation
+   * 计算 `S = H P^- H^T + R`
+   * 计算 `NIS`
+   * 再做 EKF update
+5. 最终把这些统计量写进 `sim`
+
+#### 意义
+
+这一步使得 V1 不必走“弱化过渡版 meas-stream”，而是可以直接走 **标准 innovation/NIS 路线**。
+
+---
+
+### B. `features/meas_features.py`
+
+#### 原状态
+
+最开始 `meas_features.py` 只是占位逻辑：
+
+* `node_feat = np.zeros((K, N, 0))`
+* `enabled=False`
+* 不真正参与建模
+
+#### V1 改动目标
+
+把 `meas-stream` 从空壳变成 **最小可用统计流**，并坚持项目文档中的原则：
+
+* 不直接粗暴拼 raw measurement
+* 优先在统计层/语义层对齐
+* 第一版特征必须克制
+
+这与实验推进计划中对 meas-stream 的推荐特征一致：优先纳入 `innovation / residual / normalized residual / NIS / diag(R) / valid / 少量 geometry / sensor type embedding`。
+
+#### 本窗口建议/已实施的第一版 `Dm=13` 特征
+
+当前建议的 13 维 `meas_feat` 包括：
+
+1. `innov_slot0`
+2. `innov_slot1`
+3. `white_slot0`
+4. `white_slot1`
+5. `log1p_nis`
+6. `log1p_Rdiag0`
+7. `log1p_Rdiag1`
+8. `dx_norm`
+9. `dy_norm`
+10. `range_norm`
+11. `sensor_type_code_norm`
+12. `valid_flag`
+13. `meas_dim_like`
+
+其中：
+
+* 前 1~7 维是统计一致性信息
+* 8~10 维是 geometry
+* 11 维是 sensor type
+* 12 维是 hard valid
+* 13 维保留给量测维度语义
+
+#### 重要说明
+
+invalid 节点保留：
+
+* type / geometry / valid
+
+其余统计项默认置 0，避免 NaN。
+
+---
+
+### C. `features/builders.py`
+
+#### 原状态
+
+`build_feature_bundle_from_sim()` 已支持：
+
+* 强制启用 `post-stream`
+* 若 `bundle.model.use_meas_stream=True`，则构造 `meas`
+
+#### 本窗口判断
+
+这一层架构是对的，不是当前主要问题。
+它已经能承担 V1 的桥梁作用：
+
+* `post = build_post_node_features_from_sim(...)`
+* `meas = build_meas_node_features_from_sim(...)`
+
+#### 建议
+
+后续可补：
+
+* `post_dim / meas_dim` 元信息
+* `shape assert`
+* `post.mask == meas.mask` 的一致性检查
+
+但这不是当前最急的阻塞点。
+
+---
+
+### D. `features/dataset.py`
+
+#### 原状态
+
+`FusionTimeStepDataset` 当前按**单时刻样本**组织数据：
+
+* V0 返回：
+
+  * `post_feat`
+  * `mask`
+  * `target`
+* 若 `use_meas_stream=True`，则额外返回：
+
+  * `meas_feat`
+
+#### 本窗口结论
+
+这一层已经具备 V1 兼容性，不需要重写。
+这也和当前项目对学习式融合头的定位一致：虽然底层仿真和 EKF 是时序的，但当前学习式融合头仍然基本是**单时刻输入、单时刻输出**。
+
+#### V0 / V1 dataset 差别的统一口径
+
+* V0 dataset：`post_feat + mask + target`
+* V1 dataset：`post_feat + meas_feat + mask + target`
+
+差别不在样本粒度，而在样本内容。
+
+---
+
+### E. `configs/model_config.py`
+
+#### 原状态
+
+旧版只够表达 V0：
+
+* `model_name = "original_gnn_fusion"`
+* `in_dim = 9`
+* `hidden_dim = 64`
+* `use_post_stream=True`
+* `use_meas_stream=False`
+* `use_gate=False`
+
+#### V1 改动目标
+
+把配置层从“只支持 baseline”扩成“能清楚表达 V0/V1 变体”。
+
+#### 本窗口建议/已实施的新增字段
+
+* `post_in_dim = 9`
+* `post_valid_idx = 8`
+* `meas_in_dim = 13`
+* `meas_hidden_dim = 64`
+* `fusion_variant = "post_only" / "post_meas_direct"`
+
+#### 设计原则
+
+继续遵守项目重构总原则：
+**调实验主要改 config，而不是直接改主逻辑。** 
+
+---
+
+### F. `models/gnn_fusion.py`
+
+#### 原状态
+
+已有 `OriginalGNNFusion`：
+
+* 使用 post-only 输入
+* 通过节点编码、attention、message passing、node logit 学权重
+* 最后通过 `info-diag fusion` 融合 `xhat / pdiag`
+
+#### 本窗口判断
+
+`OriginalGNNFusion` 本身是合格的 V0 baseline，不应被魔改成双流混合体。
+因为当前主线明确要求：V0 要保持为稳定、可复现、不可被后续模块破坏的零号基线。
+
+#### V1 改动
+
+新增类：
+
+* `PostMeasDirectFusion`
+
+其设计原则是：
+
+1. 保留 V0 的后端融合骨架
+2. 只在节点表示层引入 `meas-stream`
+3. 不加 gate
+4. 不加 temporal
+
+#### 结构说明
+
+* `post_enc(post_feat)`
+* `meas_enc(meas_feat)`
+* `concat -> fuse_proj`
+* 后续继续用：
+
+  * pairwise attention
+  * message passing
+  * node_logit
+  * softmax weights
+  * info-diag fusion
+
+#### 核心思想
+
+`meas-stream` 负责帮助模型学节点权重，而不是替代最终物理一致的 `info-diag` 融合形式。
+
+---
+
+### G. `models/model_factory.py`
+
+#### 原状态
+
+原 factory 只支持：
+
+* `original_gnn_fusion -> OriginalGNNFusion`
+
+#### V1 改动
+
+增加分支：
+
+* `post_meas_direct_fusion -> PostMeasDirectFusion`
+
+同时将：
+
+* `pos_scale`
+* `vel_scale`
+* `post_in_dim`
+* `meas_in_dim`
+* `post_valid_idx`
+
+都从 `bundle.model` / `bundle.scenario` 中显式传入。
+
+#### 当前目的
+
+保证：
+
+* V0 与 V1 模型构造分离
+* factory 成为唯一入口
+* 便于后续 V2/V3 扩展
+
+---
+
+### H. `configs/experiment_presets.py`
+
+#### 原状态
+
+旧版 preset 只区分：
+
+* `clean_baseline`
+* `drop_only`
+* `pollution_only`
+* `both_faults`
+* `wide_baseline_clean`
+* `asymmetric_clean`
+
+但这些只体现 fault/scene，不体现 **V 版本模型差异**。
+
+#### 本窗口新增的 preset 方向
+
+在保留旧 preset 兼容性的基础上，新增：
+
+* `clean_baseline_v0`
+* `clean_v1_post_meas_direct`
+* `wide_baseline_v0`
+* `wide_baseline_v1_post_meas_direct`
+* `asymmetric_v0`
+* `asymmetric_v1_post_meas_direct`
+
+#### 设计目的
+
+把“V0 与 V1”从概念真正变成**命令行可执行入口**，避免出现：
+
+* 代码像 V1
+* 实际 preset 还是 V0
+* 实验结果无法归因
+
+---
+
+### I. `experiments/generate_dataset.py`
+
+#### 当前真实逻辑
+
+`run_generate_dataset_experiment()` 的流程已经确认：
+
+1. `build_sim_list_from_seed_range(...)` 生成：
+
+   * `train_sims`
+   * `val_sims`
+   * `test_sims`
+2. 再额外跑一个 `quick_run = run_single_simulation(bundle)`
+3. 调 `save_raw_dataset_store(...)`
+4. 保存到 `dataset_store/`
+
+#### 重要结论
+
+当前保存的是 **raw sim store**，不是 feature dataset。
+也就是说，dataset store 的内容本质上是：
+
+* train/val/test 多个 rollout 的原始仿真结果
+* meta.json
+* 可选 quick_sim
+
+这与当前项目运行逻辑说明完全一致。
+
+---
+
+### J. `data/dataset_store.py`
+
+#### 当前真实逻辑
+
+`dataset_store.py` 当前负责：
+
+* 生成 dataset_id
+* 创建 dataset_store 目录
+* 保存：
+
+  * `train_sims.pkl`
+  * `val_sims.pkl`
+  * `test_sims.pkl`
+  * `quick_sim.pkl`
+* 写入 `meta.json`
+* 根据 `dataset_id` 或自动匹配规则查找 store
+* 从本地加载 raw sims
+
+这与项目主干说明一致。
+
+#### 当前最重要的认识
+
+`dataset_store` 保存的是 **raw sim schema**。
+因此，只要 `runner.py` 的 `sim` 字段结构变了，哪怕 `dataset_store.py` 本身没改很多，**dataset 的“内容语义”也已经变化了**。
+
+#### 当前问题
+
+`DatasetStoreMeta.feature_version` 仍是：
+
+* `raw_obs_v1`
+
+但现在 V1 已经引入了新 schema，旧版 `raw_obs_v1` 语义明显不够准确。
+
+#### 本窗口建议
+
+后续把它升级为类似：
+
+* `raw_sim_v2_with_meas_stats`
+
+并且把 `feature_version / schema_version` 纳入 `_meta_matches_bundle()` 的匹配逻辑。
+否则以后很容易出现：
+
+* preset 一样
+* seed range 一样
+* fault mode 一样
+* 但内部 sim schema 不一样
+  从而误加载旧 dataset。
+
+---
+
+## 六、运行与验证情况（本窗口已完成）
+
+### 1. V1 simulate 已成功跑通
+
+已执行命令：
+
+```bash
+python main.py --mode simulate --preset clean_v1_post_meas_direct
+```
+
+运行结果：
+
+* preset 被正确识别
+* model 为 `post_meas_direct_fusion`
+* simulate 成功完成
+* baseline metrics 正常输出
+* fault log count 为 0
+* 结果正常写入 `results/...`
+
+#### 结论
+
+这说明至少以下链路已通：
+
+1. preset 入口正常
+2. model_factory 正常
+3. runner 未被 V1 改坏
+4. result_manager 落盘正常
+
+但这**不等于** V1 训练链已打通。
+
+---
+
+### 2. V1 train 尝试加载旧 dataset 时失败
+
+已出现的实际报错：
+
+* 加载旧的 `clean_baseline` dataset store
+* 在 `build_meas_node_features_from_sim(sim, bundle)` 中报错：
+
+  * `KeyError: 'xpred'`
+
+#### 结论
+
+这证明：
+
+* 旧的 V0 dataset store 的 raw sim schema 中没有 `xpred`
+* 而当前 V1 的 `meas_features.py` 已依赖 `xpred`
+* 因此旧 dataset **不能直接用于当前 V1 训练**
+
+这不是抽象上的“不建议”，而是已经通过真实报错证明：
+**V1 必须重新生成 dataset store。**
+
+---
+
+## 七、当前对 dataset / 数据库（dataset_store）的统一理解
+
+这里必须写清楚，防止后续窗口混淆。
+
+### 1. 当前项目中的“dataset”分两层
+
+#### 第一层：离线层（dataset_store）
+
+保存在 `dataset_store/` 中，内容是：
+
+* `train_sims.pkl`
+* `val_sims.pkl`
+* `test_sims.pkl`
+* `quick_sim.pkl`
+* `meta.json`
+
+这是 **raw sim 仓库**。
+
+#### 第二层：在线层（feature dataset）
+
+训练时才动态构造：
+
+* `build_feature_bundle_from_sim()`
+* `FusionTimeStepDataset`
+
+这是 **真正喂给 PyTorch 的训练样本**。
+
+### 2. V0 与 V1 的 dataset 差异
+
+#### V0
+
+单样本：
+
+* `post_feat`
+* `mask`
+* `target`
+
+#### V1
+
+单样本：
+
+* `post_feat`
+* `meas_feat`
+* `mask`
+* `target`
+
+### 3. 为什么旧 dataset 不能直接拿来训练 V1
+
+因为旧 `dataset_store` 中保存的 raw sim schema 不包含：
+
+* `xpred`
+* `Ppred`
+* `innovation_store`
+* `S_store`
+* `nis_store`
+  等 V1 需要的字段。
+
+---
+
+## 八、当前命令与推荐操作
+
+### 1. V1 simulate
+
+```bash
+python main.py --mode simulate --preset clean_v1_post_meas_direct
+```
+
+### 2. 生成新的 V1 dataset store
+
+```bash
+python main.py --mode generate_dataset --preset clean_v1_post_meas_direct --dataset_note v1_smoke
+```
+
+### 3. 用指定 dataset_id 训练 V1
+
+```bash
+python main.py --mode train --preset clean_v1_post_meas_direct --epochs 3 --dataset_id <新的dataset_id>
+```
+
+### 4. 或用指定 dataset_dir 训练 V1
+
+```bash
+python main.py --mode train --preset clean_v1_post_meas_direct --epochs 3 --dataset_dir dataset_store\<新的dataset_id>
+```
+
+### 5. 使用最新匹配数据集
+
+```bash
+python main.py --mode train --preset clean_v1_post_meas_direct --epochs 3 --use_latest_matching_dataset
+```
+
+#### 注意
+
+如果使用 `--use_latest_matching_dataset`，必须保证：
+
+* 已经存在 **新的 V1 dataset store**
+* 且匹配逻辑不会误选旧 schema 的 store
+
+因此，当前更稳妥的做法是先用 `--dataset_id` 显式指定。
+
+---
+
+## 九、本窗口明确识别出的当前问题
+
+### 1. 旧 dataset schema 与 V1 不兼容
+
+已实测验证。
+
+### 2. dataset_store 的版本标识不足
+
+`feature_version="raw_obs_v1"` 已无法清晰区分旧 V0 raw sim 与新 V1 raw sim。
+
+### 3. 自动匹配逻辑未校验 schema 版本
+
+`_meta_matches_bundle()` 目前主要匹配：
+
+* preset_name
+* scene_name
+* fault_mode
+* seed ranges
+* fault_detail
+
+后续应加入：
+
+* `feature_version`
+* 或 `data_schema_version`
+
+### 4. V1 训练链尚未完整实测打通
+
+当前仅确认 simulate 通了；训练链仍需：
+
+1. 重新生成新的 V1 dataset
+2. 再用新 store 做一次小 epoch 冒烟训练
+
+---
+
+## 十、后续窗口接力建议（优先级顺序）
+
+### 第一优先级：先打通 V1 训练冒烟
+
+顺序：
+
+1. `generate_dataset` 生成新的 `clean_v1_post_meas_direct` dataset
+2. 记录新的 `dataset_id`
+3. 用 `--dataset_id` 显式训练 3 epoch
+4. 检查：
+
+   * `meas_feat` 是否真正进入 batch
+   * `PostMeasDirectFusion` 是否正常 forward
+   * train/val loss 是否正常下降
+   * result 目录是否正常落盘
+
+### 第二优先级：升级 dataset_store 元数据版本管理
+
+建议修改：
+
+* `feature_version`
+* `_meta_matches_bundle()`
+
+避免未来再误用旧 store。
+
+### 第三优先级：补充 V1 的 debug/检查输出
+
+建议增加：
+
+* `meas_feature_dim`
+* `feature_names`
+* batch 中 `meas_feat.shape`
+* 若缺字段则给出更明确报错
+
+### 第四优先级：V0/V1 clean 对照
+
+在 V1 冒烟训练跑通后，再做：
+
+* V0 clean baseline
+* V1 clean direct fusion
+
+对比：
+
+* train/val/test loss
+* quick metrics
+* 若可行，再看权重与节点行为
+
+### 第五优先级：后续才考虑 V2
+
+V2 才是：
+
+* `post + meas + soft gate`
+
+当前阶段不应提前混入 gate、temporal、loss 改动或 backbone 改动。项目文档也明确要求当前不要一开始就做“异构流 + gate + 时序 + 新损失”全家桶。
+
+---
+更新当前初步实验结果：
+[dataset_store] loading from: dataset_store\20260319_171547__clean_v1_post_meas_direct__clean_v1_post_meas_direct__default_clean_4sensor_scene__clean__tr10-12__va10-10__te11-11__v1_smoke
+[dataset] building train dataset...
+[dataset] train dataset ready, size=3603
+[dataset] building val dataset...
+[dataset] val dataset ready, size=1201
+[dataset] building test dataset...
+[dataset] test dataset ready, size=1201
+[Epoch 001] train=1.738778 (pos=1.446409, vel=1.461842) | val=1.469845 (pos=1.227551, vel=1.211472) | lr=1.00e-03
+[Epoch 002] train=1.444732 (pos=1.198844, vel=1.229440) | val=1.377928 (pos=1.143797, vel=1.170652) | lr=1.00e-03
+[Epoch 003] train=1.371267 (pos=1.131205, vel=1.200312) | val=1.315837 (pos=1.083035, vel=1.164010) | lr=1.00e-03
+[Epoch 004] train=1.318900 (pos=1.079753, vel=1.195735) | val=1.318493 (pos=1.087593, vel=1.154501) | lr=1.00e-03
+[Epoch 005] train=1.291677 (pos=1.054311, vel=1.186832) | val=1.285291 (pos=1.055898, vel=1.146965) | lr=1.00e-03
+[Epoch 006] train=1.287989 (pos=1.051294, vel=1.183471) | val=1.290940 (pos=1.061544, vel=1.146980) | lr=1.00e-03
+[Epoch 007] train=1.287029 (pos=1.050048, vel=1.184908) | val=1.275266 (pos=1.045963, vel=1.146513) | lr=1.00e-03
+[Epoch 008] train=1.277015 (pos=1.040654, vel=1.181806) | val=1.296979 (pos=1.064897, vel=1.160409) | lr=1.00e-03
+[Epoch 009] train=1.269400 (pos=1.031446, vel=1.189769) | val=1.279757 (pos=1.049750, vel=1.150038) | lr=1.00e-03
+[Epoch 010] train=1.271239 (pos=1.035184, vel=1.180271) | val=1.267584 (pos=1.036508, vel=1.155381) | lr=1.00e-03
+[Epoch 011] train=1.263298 (pos=1.026726, vel=1.182858) | val=1.229317 (pos=1.001587, vel=1.138648) | lr=1.00e-03
+[Epoch 012] train=1.253095 (pos=1.017337, vel=1.178790) | val=1.241092 (pos=1.012347, vel=1.143723) | lr=1.00e-03
+[Epoch 013] train=1.250683 (pos=1.015000, vel=1.178418) | val=1.281133 (pos=1.048711, vel=1.162111) | lr=1.00e-03
+[Epoch 014] train=1.253339 (pos=1.017897, vel=1.177210) | val=1.221301 (pos=0.993403, vel=1.139488) | lr=1.00e-03
+[Epoch 015] train=1.247756 (pos=1.012233, vel=1.177614) | val=1.237792 (pos=1.008978, vel=1.144074) | lr=1.00e-03
+[Epoch 016] train=1.241740 (pos=1.006955, vel=1.173925) | val=1.218474 (pos=0.990552, vel=1.139606) | lr=1.00e-03
+[Epoch 017] train=1.234415 (pos=0.999892, vel=1.172612) | val=1.243393 (pos=1.015287, vel=1.140530) | lr=1.00e-03
+[Epoch 018] train=1.233386 (pos=0.998365, vel=1.175106) | val=1.246405 (pos=1.018884, vel=1.137604) | lr=1.00e-03
+[Epoch 019] train=1.228963 (pos=0.995211, vel=1.168759) | val=1.196219 (pos=0.969801, vel=1.132085) | lr=1.00e-03
+[Epoch 020] train=1.226161 (pos=0.991969, vel=1.170958) | val=1.202541 (pos=0.974757, vel=1.138917) | lr=1.00e-03
+[Epoch 021] train=1.225085 (pos=0.991046, vel=1.170196) | val=1.205565 (pos=0.976008, vel=1.147784) | lr=1.00e-03
+[Epoch 022] train=1.221901 (pos=0.988168, vel=1.168664) | val=1.198795 (pos=0.972167, vel=1.133138) | lr=1.00e-03
+[Epoch 023] train=1.221603 (pos=0.988325, vel=1.166390) | val=1.214671 (pos=0.987394, vel=1.136385) | lr=1.00e-03
+[Epoch 024] train=1.214072 (pos=0.980477, vel=1.167972) | val=1.178694 (pos=0.952681, vel=1.130065) | lr=1.00e-03
+[Epoch 025] train=1.214960 (pos=0.982242, vel=1.163591) | val=1.206913 (pos=0.981320, vel=1.127967) | lr=1.00e-03
+[Epoch 026] train=1.215760 (pos=0.982933, vel=1.164134) | val=1.204956 (pos=0.977389, vel=1.137837) | lr=1.00e-03
+[Epoch 027] train=1.214374 (pos=0.981032, vel=1.166706) | val=1.177504 (pos=0.953458, vel=1.120232) | lr=1.00e-03
+[Epoch 028] train=1.206338 (pos=0.974805, vel=1.157661) | val=1.176764 (pos=0.951603, vel=1.125807) | lr=1.00e-03
+[Epoch 029] train=1.200588 (pos=0.968402, vel=1.160933) | val=1.207670 (pos=0.980950, vel=1.133602) | lr=1.00e-03
+[Epoch 030] train=1.203684 (pos=0.971688, vel=1.159979) | val=1.180438 (pos=0.955937, vel=1.122509) | lr=1.00e-03
+[Epoch 031] train=1.198184 (pos=0.966806, vel=1.156887) | val=1.197671 (pos=0.973183, vel=1.122439) | lr=1.00e-03
+[Epoch 032] train=1.195908 (pos=0.964236, vel=1.158363) | val=1.163591 (pos=0.939835, vel=1.118780) | lr=1.00e-03
+[Epoch 033] train=1.203320 (pos=0.971361, vel=1.159792) | val=1.195788 (pos=0.971077, vel=1.123556) | lr=1.00e-03
+[Epoch 034] train=1.202032 (pos=0.970813, vel=1.156098) | val=1.204422 (pos=0.978438, vel=1.129920) | lr=1.00e-03
+[Epoch 035] train=1.195254 (pos=0.963037, vel=1.161083) | val=1.188895 (pos=0.962999, vel=1.129481) | lr=1.00e-03
+[Epoch 036] train=1.198741 (pos=0.966932, vel=1.159044) | val=1.177587 (pos=0.953481, vel=1.120529) | lr=1.00e-03
+[Epoch 037] train=1.199745 (pos=0.968660, vel=1.155427) | val=1.183961 (pos=0.958859, vel=1.125508) | lr=5.00e-04
+[Epoch 038] train=1.188617 (pos=0.957454, vel=1.155813) | val=1.157797 (pos=0.933736, vel=1.120305) | lr=5.00e-04
+[Epoch 039] train=1.177582 (pos=0.947740, vel=1.149211) | val=1.137142 (pos=0.914363, vel=1.113897) | lr=5.00e-04
+[Epoch 040] train=1.172657 (pos=0.943257, vel=1.146999) | val=1.141756 (pos=0.919217, vel=1.112699) | lr=5.00e-04
+[Epoch 041] train=1.173777 (pos=0.944316, vel=1.147305) | val=1.152370 (pos=0.928474, vel=1.119483) | lr=5.00e-04
+[Epoch 042] train=1.176015 (pos=0.946100, vel=1.149575) | val=1.150132 (pos=0.927093, vel=1.115194) | lr=5.00e-04
+[Epoch 043] train=1.171061 (pos=0.941524, vel=1.147683) | val=1.147124 (pos=0.924294, vel=1.114148) | lr=5.00e-04
+[Epoch 044] train=1.173776 (pos=0.944487, vel=1.146446) | val=1.127166 (pos=0.904650, vel=1.112577) | lr=5.00e-04
+[Epoch 045] train=1.170759 (pos=0.941689, vel=1.145350) | val=1.143343 (pos=0.920923, vel=1.112102) | lr=5.00e-04
+[Epoch 046] train=1.173274 (pos=0.944118, vel=1.145780) | val=1.142093 (pos=0.919881, vel=1.111061) | lr=5.00e-04
+[Epoch 047] train=1.168050 (pos=0.938613, vel=1.147183) | val=1.143206 (pos=0.921006, vel=1.111002) | lr=5.00e-04
+[Epoch 048] train=1.166830 (pos=0.938140, vel=1.143449) | val=1.125751 (pos=0.903597, vel=1.110772) | lr=5.00e-04
+[Epoch 049] train=1.167290 (pos=0.938529, vel=1.143806) | val=1.119237 (pos=0.897644, vel=1.107969) | lr=5.00e-04
+[Epoch 050] train=1.161424 (pos=0.933037, vel=1.141933) | val=1.143783 (pos=0.921572, vel=1.111052) | lr=5.00e-04
+[Epoch 051] train=1.161820 (pos=0.933317, vel=1.142515) | val=1.135870 (pos=0.913978, vel=1.109463) | lr=5.00e-04
+[Epoch 052] train=1.165439 (pos=0.936822, vel=1.143087) | val=1.117161 (pos=0.895265, vel=1.109481) | lr=5.00e-04
+[Epoch 053] train=1.156378 (pos=0.928494, vel=1.139423) | val=1.110763 (pos=0.889367, vel=1.106979) | lr=5.00e-04
+[Epoch 054] train=1.158923 (pos=0.930640, vel=1.141416) | val=1.151228 (pos=0.928981, vel=1.111236) | lr=5.00e-04
+[Epoch 055] train=1.159240 (pos=0.931415, vel=1.139127) | val=1.123322 (pos=0.902434, vel=1.104441) | lr=5.00e-04
+[Epoch 056] train=1.159972 (pos=0.932044, vel=1.139637) | val=1.163821 (pos=0.941673, vel=1.110742) | lr=5.00e-04
+[Epoch 057] train=1.155821 (pos=0.927528, vel=1.141465) | val=1.114654 (pos=0.893167, vel=1.107433) | lr=5.00e-04
+[Epoch 058] train=1.157214 (pos=0.929521, vel=1.138466) | val=1.117792 (pos=0.895852, vel=1.109698) | lr=2.50e-04
+[Epoch 059] train=1.144410 (pos=0.916528, vel=1.139411) | val=1.114457 (pos=0.893435, vel=1.105113) | lr=2.50e-04
+[Epoch 060] train=1.139339 (pos=0.912286, vel=1.135265) | val=1.108835 (pos=0.888228, vel=1.103036) | lr=2.50e-04
+[Epoch 061] train=1.140790 (pos=0.913589, vel=1.136004) | val=1.108049 (pos=0.887584, vel=1.102324) | lr=2.50e-04
+[Epoch 062] train=1.137536 (pos=0.911018, vel=1.132594) | val=1.118366 (pos=0.897729, vel=1.103183) | lr=2.50e-04
+[Epoch 063] train=1.136076 (pos=0.909440, vel=1.133180) | val=1.115182 (pos=0.893804, vel=1.106891) | lr=2.50e-04
+[Epoch 064] train=1.136667 (pos=0.909889, vel=1.133890) | val=1.105694 (pos=0.885044, vel=1.103252) | lr=2.50e-04
+[Epoch 065] train=1.136116 (pos=0.909460, vel=1.133282) | val=1.103836 (pos=0.883490, vel=1.101733) | lr=2.50e-04
+[Epoch 066] train=1.135708 (pos=0.909427, vel=1.131403) | val=1.104929 (pos=0.885289, vel=1.098200) | lr=2.50e-04
+[Epoch 067] train=1.136460 (pos=0.910028, vel=1.132164) | val=1.109725 (pos=0.888892, vel=1.104161) | lr=2.50e-04
+[Epoch 068] train=1.132864 (pos=0.906180, vel=1.133421) | val=1.106902 (pos=0.886859, vel=1.100215) | lr=2.50e-04
+[Epoch 069] train=1.131746 (pos=0.905797, vel=1.129745) | val=1.102644 (pos=0.882551, vel=1.100463) | lr=2.50e-04
+[Epoch 070] train=1.129530 (pos=0.903449, vel=1.130405) | val=1.105115 (pos=0.884996, vel=1.100593) | lr=2.50e-04
+[Epoch 071] train=1.131417 (pos=0.905321, vel=1.130479) | val=1.097829 (pos=0.877088, vel=1.103704) | lr=2.50e-04
+[Epoch 072] train=1.131159 (pos=0.905170, vel=1.129947) | val=1.098645 (pos=0.878130, vel=1.102573) | lr=2.50e-04
+[Epoch 073] train=1.130750 (pos=0.904452, vel=1.131488) | val=1.104593 (pos=0.884298, vel=1.101476) | lr=2.50e-04
+[Epoch 074] train=1.128725 (pos=0.902492, vel=1.131168) | val=1.094221 (pos=0.874766, vel=1.097275) | lr=2.50e-04
+[Epoch 075] train=1.128737 (pos=0.902990, vel=1.128731) | val=1.108537 (pos=0.888482, vel=1.100275) | lr=2.50e-04
+[Epoch 076] train=1.127376 (pos=0.901246, vel=1.130649) | val=1.090888 (pos=0.870954, vel=1.099670) | lr=2.50e-04
+[Epoch 077] train=1.126429 (pos=0.900225, vel=1.131023) | val=1.099605 (pos=0.879483, vel=1.100609) | lr=2.50e-04
+[Epoch 078] train=1.129293 (pos=0.903475, vel=1.129091) | val=1.097981 (pos=0.878394, vel=1.097936) | lr=2.50e-04
+[Epoch 079] train=1.128010 (pos=0.901992, vel=1.130093) | val=1.095462 (pos=0.875216, vel=1.101230) | lr=2.50e-04
+[Epoch 080] train=1.127559 (pos=0.901759, vel=1.129000) | val=1.091633 (pos=0.872171, vel=1.097314) | lr=2.50e-04
+[Best Model Test] loss=1.126482, pos=0.903303, vel=1.115893
+
+=== Training Summary ===
+           best_val_loss: 1.090888
+               test_loss: 1.126482
+              best_epoch: 76.000000
+           test_loss_pos: 0.903303
+           test_loss_vel: 1.115893
+
+=== Quick GNN Metrics ===
+            rmse_gnn_pos: 1.692670
+           rmse_gnn_full: 2.281109
+               mean_w_s1: 0.085320
+               mean_w_s2: 0.155672
+               mean_w_s3: 0.283364
+               mean_w_s4: 0.475644
+
+Dataset store: dataset_store\20260319_171547__clean_v1_post_meas_direct__clean_v1_post_meas_direct__default_clean_4sensor_scene__clean__tr10-12__va10-10__te11-11__v1_smoke
+
+Results saved to: results\20260319_171831__train__clean_v1_post_meas_direct__default_clean_4sensor_scene__post_meas_direct_fusion
+PS D:\code\python\project-2\project_root> 
+总结：
+当前 V1（post-stream + meas-stream direct fusion）已完成训练闭环验证，并取得稳定可重复的初步结果。但在 clean 设定下，V1 相较 V0 baseline 出现误差上升，说明仅通过双流直连并不能自动带来性能增益。初步判断原因是：meas-stream 虽引入了量测空间中的异构信息与一致性证据，但在缺乏显式选择机制时，也会将额外噪声与不稳定性同时带入融合层，干扰原有 post-stream 稳定主干。因此，当前结果不应被视为路线否定，反而构成了后续引入 soft gate / selective fusion 的直接依据。后续推进应围绕“如何选择性利用 meas-stream”展开，而非简单扩大模型规模或直接更换 backbone。
+这一判断与当前项目既定路线一致：先 meas-stream，再 gate，再 temporal-aware gate 与 reliability modelling。
+------------------------------------------------------------
+
+

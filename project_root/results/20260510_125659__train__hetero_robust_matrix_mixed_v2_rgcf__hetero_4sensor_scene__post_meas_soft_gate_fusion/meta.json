@@ -1,0 +1,11 @@
+{
+  "mode": "train",
+  "timestamp_dir": "20260510_125659",
+  "run_dir": "results\\20260510_125659__train__hetero_robust_matrix_mixed_v2_rgcf__hetero_4sensor_scene__post_meas_soft_gate_fusion",
+  "preset_name": "hetero_robust_matrix_mixed_v2_rgcf",
+  "experiment_name": "hetero_robust_matrix_mixed_v2_rgcf",
+  "scene_name": "hetero_4sensor_scene",
+  "model_name": "post_meas_soft_gate_fusion",
+  "fault_mode": "robust_matrix_mixed",
+  "device": "cpu"
+}

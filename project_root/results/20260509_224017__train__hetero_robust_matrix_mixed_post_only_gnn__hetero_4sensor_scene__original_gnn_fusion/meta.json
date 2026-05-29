@@ -1,0 +1,11 @@
+{
+  "mode": "train",
+  "timestamp_dir": "20260509_224017",
+  "run_dir": "results\\20260509_224017__train__hetero_robust_matrix_mixed_post_only_gnn__hetero_4sensor_scene__original_gnn_fusion",
+  "preset_name": "hetero_robust_matrix_mixed_post_only_gnn",
+  "experiment_name": "hetero_robust_matrix_mixed_post_only_gnn",
+  "scene_name": "hetero_4sensor_scene",
+  "model_name": "original_gnn_fusion",
+  "fault_mode": "robust_matrix_mixed",
+  "device": "cpu"
+}

@@ -1,0 +1,280 @@
+{
+  "identity": {
+    "preset_name": "hetero_robust_matrix_mixed_post_only_gnn",
+    "experiment_name": "hetero_robust_matrix_mixed_post_only_gnn",
+    "scene_name": "hetero_4sensor_scene",
+    "model_name": "original_gnn_fusion",
+    "fault_mode": "robust_matrix_mixed"
+  },
+  "base": {
+    "runtime": {
+      "device": "cpu",
+      "seed": 7
+    },
+    "results": {
+      "result_root": "results",
+      "save_json": true,
+      "save_csv": true,
+      "save_plots": true,
+      "save_model_ckpt": true
+    }
+  },
+  "scenario": {
+    "scene_name": "hetero_4sensor_scene",
+    "motion": {
+      "dt": 0.1,
+      "T": 120.0,
+      "init_px": 0.0,
+      "init_py": 0.0,
+      "init_v": 15.0,
+      "init_psi_deg": 20.0,
+      "a_segmentA": 0.3,
+      "yaw_rate_B_deg": 3.0,
+      "yaw_rate_D_deg": -4.0,
+      "yaw_rate_D_duration": 15.0,
+      "s_disturb_amp_deg": 1.5,
+      "s_disturb_period": 8.0,
+      "sigma_a_base": 1.0,
+      "sigma_a_turn": 1.5
+    },
+    "sensor_layout": {
+      "sensors": [
+        {
+          "sensor_id": 1,
+          "name": "s1_gps",
+          "sensor_type": "gps2d",
+          "position": [
+            -800.0,
+            -200.0
+          ],
+          "gps_sigma": 5.0,
+          "gps_bias_rw_sigma": 0.02,
+          "radar_sigma_r": 3.0,
+          "radar_sigma_theta_deg": 0.5,
+          "aoa_sigma_theta_deg": 0.8,
+          "uwb_sigma_r": 1.5,
+          "uwb_far_r0": 1300.0,
+          "uwb_far_k": 0.002
+        },
+        {
+          "sensor_id": 2,
+          "name": "s2_radar",
+          "sensor_type": "radar_rb",
+          "position": [
+            900.0,
+            -100.0
+          ],
+          "gps_sigma": 5.0,
+          "gps_bias_rw_sigma": 0.02,
+          "radar_sigma_r": 3.0,
+          "radar_sigma_theta_deg": 0.5,
+          "aoa_sigma_theta_deg": 0.8,
+          "uwb_sigma_r": 1.5,
+          "uwb_far_r0": 1300.0,
+          "uwb_far_k": 0.002
+        },
+        {
+          "sensor_id": 3,
+          "name": "s3_gps_clean",
+          "sensor_type": "gps2d",
+          "position": [
+            -300.0,
+            900.0
+          ],
+          "gps_sigma": 2.5,
+          "gps_bias_rw_sigma": 0.03,
+          "radar_sigma_r": 3.0,
+          "radar_sigma_theta_deg": 0.5,
+          "aoa_sigma_theta_deg": 0.8,
+          "uwb_sigma_r": 1.5,
+          "uwb_far_r0": 1300.0,
+          "uwb_far_k": 0.002
+        },
+        {
+          "sensor_id": 4,
+          "name": "s4_radar",
+          "sensor_type": "radar_rb",
+          "position": [
+            700.0,
+            850.0
+          ],
+          "gps_sigma": 5.0,
+          "gps_bias_rw_sigma": 0.02,
+          "radar_sigma_r": 2.0,
+          "radar_sigma_theta_deg": 0.35,
+          "aoa_sigma_theta_deg": 0.8,
+          "uwb_sigma_r": 1.5,
+          "uwb_far_r0": 1300.0,
+          "uwb_far_k": 0.002
+        }
+      ]
+    },
+    "pos_scale": 1000.0,
+    "vel_scale": 30.0
+  },
+  "fault": {
+    "mode": "robust_matrix_mixed",
+    "dropout": {
+      "enabled": false,
+      "windows": []
+    },
+    "pollution": {
+      "enabled": false,
+      "target_sensor_ids": [],
+      "bias_rw_sigma": 0.03,
+      "jump_prob": 0.0,
+      "jump_sigma": 0.0,
+      "active_time_window": null,
+      "fault_shape": "jump"
+    },
+    "matrix_cases": [
+      {
+        "mode": "clean",
+        "sensor_id": null
+      },
+      {
+        "mode": "clean",
+        "sensor_id": null
+      },
+      {
+        "mode": "clean",
+        "sensor_id": null
+      },
+      {
+        "mode": "clean",
+        "sensor_id": null
+      },
+      {
+        "mode": "pollution",
+        "sensor_id": 1
+      },
+      {
+        "mode": "pollution",
+        "sensor_id": 2
+      },
+      {
+        "mode": "pollution",
+        "sensor_id": 3
+      },
+      {
+        "mode": "pollution",
+        "sensor_id": 4
+      },
+      {
+        "mode": "pollution",
+        "sensor_id": 1
+      },
+      {
+        "mode": "pollution",
+        "sensor_id": 3
+      },
+      {
+        "mode": "bias_ramp",
+        "sensor_id": 1
+      },
+      {
+        "mode": "bias_ramp",
+        "sensor_id": 2
+      },
+      {
+        "mode": "bias_ramp",
+        "sensor_id": 3
+      },
+      {
+        "mode": "bias_ramp",
+        "sensor_id": 4
+      },
+      {
+        "mode": "bias_ramp",
+        "sensor_id": 2
+      },
+      {
+        "mode": "bias_ramp",
+        "sensor_id": 4
+      },
+      {
+        "mode": "dropout",
+        "sensor_id": 1
+      },
+      {
+        "mode": "dropout",
+        "sensor_id": 2
+      },
+      {
+        "mode": "dropout",
+        "sensor_id": 3
+      },
+      {
+        "mode": "dropout",
+        "sensor_id": 4
+      }
+    ],
+    "candidate_sensor_ids": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "random_target_by_seed": true,
+    "window": [
+      30.0,
+      70.0
+    ]
+  },
+  "model": {
+    "model_name": "original_gnn_fusion",
+    "in_dim": 9,
+    "post_in_dim": 9,
+    "post_valid_idx": 8,
+    "meas_in_dim": 13,
+    "hidden_dim": 64,
+    "meas_hidden_dim": 64,
+    "gate_hidden_dim": 64,
+    "gate_type": "soft_scalar",
+    "gate_on_meas_only": true,
+    "gate_init_bias": 1.0,
+    "gate_weight_alpha": 1.0,
+    "gate_eps": 0.0001,
+    "use_cov_calibration": false,
+    "cov_calib_min_scale": 1.0,
+    "cov_calib_max_scale": 20.0,
+    "use_gate_supervision": false,
+    "use_balanced_gate_loss": true,
+    "gate_supervision_weight": 0.05,
+    "gate_prior_weight": 0.005,
+    "gate_prior_mean": 0.75,
+    "normal_gate_target": 0.8,
+    "fault_gate_target": 0.2,
+    "return_weights_during_eval": true,
+    "use_post_stream": true,
+    "use_meas_stream": false,
+    "use_gate": false,
+    "use_temporal": false,
+    "window_size": 6,
+    "temporal_enc_type": "gru",
+    "fusion_variant": "post_only"
+  },
+  "train": {
+    "epochs": 80,
+    "lr": 0.001,
+    "batch_size": 64,
+    "weight_decay": 1e-05,
+    "grad_clip": 1.0,
+    "early_stop_patience": 12,
+    "train_seed_start": 10,
+    "train_seed_end": 69,
+    "val_seed_start": 70,
+    "val_seed_end": 89,
+    "test_seed_start": 90,
+    "test_seed_end": 109,
+    "repeat_runs": 5,
+    "repeat_seed_stride": 100
+  },
+  "runtime_flags": {
+    "do_simulate": true,
+    "do_train": true,
+    "do_eval": true,
+    "do_repeat": false,
+    "do_plot_weights": false
+  }
+}

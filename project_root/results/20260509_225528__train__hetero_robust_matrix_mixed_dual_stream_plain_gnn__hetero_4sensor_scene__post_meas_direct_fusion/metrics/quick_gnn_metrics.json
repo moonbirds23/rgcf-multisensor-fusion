@@ -1,0 +1,17 @@
+{
+  "rmse_gnn_pos": 1.9893338680267334,
+  "rmse_gnn_full": 2.5448660850524902,
+  "mean_w_s1": 0.16162468492984772,
+  "mean_w_s2": 0.11146271973848343,
+  "mean_w_s3": 0.3542270064353943,
+  "mean_w_s4": 0.37268558144569397,
+  "fault_window_t0": 30.0,
+  "fault_window_t1": 70.0,
+  "fault_window_steps": 401,
+  "pre_fault_mean_weight": 0.25,
+  "fault_window_mean_weight": 0.08079078793525696,
+  "post_fault_mean_weight": 0.25,
+  "fault_top1_weight_rate": 0.08229426433915212,
+  "fault_weight_below_equal_rate": 0.8977556109725686,
+  "fault_weight_below_010_rate": 0.8653366583541147
+}

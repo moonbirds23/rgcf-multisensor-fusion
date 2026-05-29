@@ -1,0 +1,11 @@
+{
+  "mode": "train",
+  "timestamp_dir": "20260507_223436",
+  "run_dir": "results\\20260507_223436__train__clean_v2_post_meas_softgate__default_clean_4sensor_scene__post_meas_soft_gate_fusion",
+  "preset_name": "clean_v2_post_meas_softgate",
+  "experiment_name": "smoke_train_clean_v2_epoch1",
+  "scene_name": "default_clean_4sensor_scene",
+  "model_name": "post_meas_soft_gate_fusion",
+  "fault_mode": "clean",
+  "device": "cpu"
+}

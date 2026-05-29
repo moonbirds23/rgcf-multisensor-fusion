@@ -1,0 +1,11 @@
+{
+  "mode": "train",
+  "timestamp_dir": "20260508_125952",
+  "run_dir": "results\\20260508_125952__train__hetero_window_pollution_v2_rgcf__hetero_4sensor_scene__post_meas_soft_gate_fusion",
+  "preset_name": "hetero_window_pollution_v2_rgcf",
+  "experiment_name": "hetero_window_pollution_v2_rgcf",
+  "scene_name": "hetero_4sensor_scene",
+  "model_name": "post_meas_soft_gate_fusion",
+  "fault_mode": "pollution",
+  "device": "cpu"
+}

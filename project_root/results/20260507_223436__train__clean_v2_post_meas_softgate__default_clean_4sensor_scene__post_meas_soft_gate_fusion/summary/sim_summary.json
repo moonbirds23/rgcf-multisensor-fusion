@@ -1,0 +1,30 @@
+{
+  "scene_name": "default_clean_4sensor_scene",
+  "fault_mode": "clean",
+  "t_shape": [
+    1201
+  ],
+  "x_truth_4d_shape": [
+    1201,
+    4
+  ],
+  "x_truth_5d_shape": [
+    1201,
+    5
+  ],
+  "xhat_shape": [
+    1201,
+    4,
+    4
+  ],
+  "Phat_shape": [
+    1201,
+    4,
+    4,
+    4
+  ],
+  "valid_mask_shape": [
+    1201,
+    4
+  ]
+}

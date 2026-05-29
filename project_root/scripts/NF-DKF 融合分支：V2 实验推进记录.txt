@@ -1,0 +1,285 @@
+下面给你一版可直接写入 **V2 实验推进记录** 的文字版总结。我按“目标—代码推进—运行验证—结果判断—遗留问题—下一步”来组织，尽量贴近实验记录口径。
+
+---
+
+# NF-DKF 融合分支：V2 实验推进记录（本窗口总结）
+
+## 一、当前窗口的总体目标
+
+本窗口的核心任务，是在 V1 已完成的 `post + meas direct fusion` 基础上，正式推进到 **V2：`post + meas + soft gate`**，并验证以下三件事：
+
+1. **工程上**：V2 是否能在现有主干中稳定接入，而不破坏当前训练、评估、数据集仓库和结果落盘逻辑。
+2. **方法上**：`soft gate` 是否能作为 `meas-stream` 的显式选择机制，弥补 V1 direct fusion 在 clean 场景下“把额外噪声与不稳定性一起带入融合层”的问题。V1 的推进记录已经明确指出，V1 在 clean 下误差上升并不否定 meas-stream 路线，反而直接构成后续引入 selective fusion 的依据。
+3. **实验上**：在不引入 temporal、不修改 loss、不更换 backbone 的前提下，先做一版结构最小、归因清晰的 V2 验证。根据当前实验推进计划，V2 的正确定义就是在 V1 基础上对 `meas-stream` 加 `soft gate`，第一版 gate 优先只作用于 `meas-stream`，保留 `hard valid`，并且不同时混入新 loss 或时序模块。
+
+---
+
+## 二、当前窗口确认的 V2 设计口径
+
+本窗口首先对 V2 的定义进行了明确收敛，避免版本边界混乱。最终确认如下：
+
+### 1. V2 的版本定义
+
+V2 定义为：
+
+* `post-stream + meas-stream + soft gate`
+* gate 默认只作用于 `meas-stream`
+* `hard valid` 保留，不由 learned gate 替代
+* 不改 loss
+* 不引入 temporal
+* 不更换现有 GNN 主骨架
+
+这一点与当前实验推进计划中的版本树定义一致：
+V0 是 post-only baseline；V1 是 post+meas direct fusion；V2 才是 post+meas+soft gate，而且每一步只引入一个关键变量，以保证可归因。
+
+### 2. V2 的 gate 设计原则
+
+本窗口确认，第一版 gate 采用：
+
+* **标量 soft gate**
+* 由 `post` 与 `meas` 的高层编码联合决定
+* 默认不对 `post-stream` 加 gate
+* 默认不引入全局 context
+* 默认不做高维 channel gate
+
+这与当前实验推进计划的默认理解一致：第一版优先做标量 gate 或低维组块 gate，不建议一开始就上复杂高维通道 gate；gate 默认优先只作用于 `meas-stream`。
+
+### 3. 对 Selective Sensor Fusion 的借鉴口径
+
+本窗口将 Chen 等人的 Selective Sensor Fusion 思路，明确迁移为：
+
+* 先分别编码不同来源特征
+* 再在高层特征上做 soft gate
+* gate 由多源上下文共同决定
+* `hard valid` 不替代，建议理解为 `g = valid × reliability`
+
+这与当前项目文档中的默认借鉴方式完全一致。
+
+---
+
+## 三、本窗口完成的代码推进
+
+本窗口的主要代码推进，集中在 **模型层、配置层、实验入口层、评估层和结果落盘层**，没有改动 runner 的 raw sim schema，也没有动 loss。这样做是为了保证 V2 第一版尽量最小化改动范围，与当前主干“调实验主要改 config，而不是直接改主逻辑”的原则保持一致。
+
+### 1. 模型层：正式新增 V2 模型
+
+在 `models/gnn_fusion.py` 中，保留：
+
+* `OriginalGNNFusion` 作为 V0 稳定 baseline
+* `PostMeasDirectFusion` 作为 V1 direct dual-stream
+
+并新增：
+
+* `PostMeasSoftGateFusion`
+
+该类的核心逻辑是：
+
+* `post_enc(post_feat) -> h_post`
+* `meas_enc(meas_feat) -> h_meas`
+* `gate_net([h_post, h_meas]) -> gate`
+* `h_meas_gated = gate * valid * h_meas`
+* `concat([h_post, h_meas_gated]) -> fuse_proj`
+* 后续继续复用 V0/V1 的 attention、message passing、node logit 和 `info-diag fusion`
+
+这种做法与当前项目主线一致：V0 不应被魔改，V1/V2 都应该在独立类中扩展，以保证版本树干净可复现。
+
+### 2. 工厂层：接入 V2 模型注册
+
+在 `models/model_factory.py` 中，新增了：
+
+* `post_meas_soft_gate_fusion -> PostMeasSoftGateFusion`
+
+从而保证 V2 可以通过 `preset -> bundle -> factory` 的现有主链路直接构造，而不用在主脚本里写分支。
+
+### 3. 配置层：显式表达 V2 变体
+
+在 `configs/model_config.py` 中，新增并明确了以下字段：
+
+* `gate_hidden_dim`
+* `gate_type`
+* `gate_on_meas_only`
+* `gate_init_bias`
+* `fusion_variant = "post_meas_soft_gate"`
+
+在 `configs/experiment_presets.py` 中，新增了 V2 预设：
+
+* `clean_v2_post_meas_softgate`
+* 同时为后续 `wide / asymmetric` 预留了 V2 预设扩展方式
+
+这样做的意义在于，V2 不再只是“代码里多一个门”，而是正式成为 preset 层可调度、可复现实验版本的一部分。当前主干说明已明确，配置层就是为了集中表达实验语义，而不是在主逻辑里散乱改参数。
+
+### 4. 评估层：补充 gate 统计
+
+在 `training/evaluator.py` 中，本窗口新增了 gate 相关 quick metrics 的统计，包括：
+
+* `mean_gate`
+* `std_gate`
+* `mean_gate_valid_only`
+* `mean_g_s1 ~ mean_g_s4`
+
+这一步非常关键。因为当前阶段判断模块是否“有效”，不应只看 clean RMSE 是否略有下降，更应该看节点行为是否更可解释。
+
+### 5. 结果层：把 gate 时间序列正式落盘
+
+本窗口后半段继续向前推进，在 quick evaluation 的基础上，新增：
+
+* `evaluate_single_sim_fusion_with_timeseries(...)`
+
+返回：
+
+* `summary`
+* `timeseries`
+
+其中 `timeseries` 保存每个时刻的：
+
+* `k`
+* `t`
+* `g_s1 ~ g_s4`
+* `w_s1 ~ w_s4`
+
+随后修改 `experiments/train.py`、`main.py` 和 `core/result_manager.py`，让训练结束后自动保存：
+
+* `artifacts/gate_timeseries.csv`
+* `artifacts/gate_timeseries.json`
+
+这一步的意义在于，V2 的验证正式从“看一个全局平均 gate 值”，推进到了“可以分析 gate 的时间变化行为”。而根据当前项目的默认时序理解，后续 temporal 路线的重点就是让当前时刻的融合判断参考最近几步的节点表现和量测一致性，因此先把 gate 的时间曲线保存出来，是后续继续推进 temporal-aware gate 的必要准备。
+
+---
+
+## 四、本窗口对运行逻辑的进一步确认
+
+本窗口再次确认了当前项目真实运行逻辑，并据此约束了 V2 的改动边界：
+
+1. 当前训练流程已经不是“现场构造 sims 再训练”，而是：
+
+   * 先 `generate_dataset`
+   * 保存到 `dataset_store/`
+   * 训练时从 `dataset_store` 读取 raw sims
+   * 再动态构造 `FeatureBundle` 和 `FusionTimeStepDataset`
+
+2. `dataset_store/` 保存的是 **raw sim store**，不是固化好的 feature tensor；因此只要 raw sim schema 一致，V1 和 V2 在原理上是可以共用同一份 dataset store 的。
+
+3. 当前 `runner.py` 已经提供了 V1/V2 所需的关键字段：
+
+   * `xpred / Ppred`
+   * `innovation_store`
+   * `S_store`
+   * `nis_store`
+   * `sensor_type_codes`
+   * `sensor_pos`
+
+因此，本窗口明确决定：**V2 第一版不再改 runner schema，只改模型与评估层。**
+
+---
+
+## 五、本窗口完成的运行与验证
+
+### 1. V2 数据集生成与训练闭环验证
+
+本窗口首先完成了 V2 clean preset 的数据集生成与训练冒烟验证，证明：
+
+* `clean_v2_post_meas_softgate` preset 可以正常进入 `generate_dataset`
+* 可以通过 `train` 模式读取 dataset store
+* 可以完成训练、验证、测试、quick eval 与结果落盘全链路
+
+说明 V2 已经具备正式实验版本的最低工程条件。
+
+### 2. 5 epoch 冒烟结果
+
+在初次 5 epoch 训练中，V2 得到了可用的 loss 和 quick metrics，但 gate 指标呈现出：
+
+* `mean_gate` 接近 1
+* `std_gate` 很小
+* 各传感器 gate 都接近全开
+
+本窗口据此判断：这时的 gate 还没有真正学出 selective behavior，更像是“几乎恒开的弱门”。
+
+### 3. 80 epoch 训练结果
+
+随后本窗口将训练轮次提升到 80 epoch，得到的结果显示：
+
+* `best_val_loss = 1.275880`
+* `test_loss = 1.214242`
+* `rmse_gnn_pos = 1.662287`
+
+更关键的是，gate 的统计明显发生变化：
+
+* `mean_gate = 0.741799`
+* `std_gate = 0.106208`
+* `mean_g_s1 = 0.861756`
+* `mean_g_s2 = 0.780732`
+* `mean_g_s3 = 0.692094`
+* `mean_g_s4 = 0.632614`
+
+这说明，V2 不再处于“门几乎恒开”的状态，而是开始形成**真实的跨传感器差异化 gate 分配**。从研究意义上讲，这说明 V2 已经从“结构正确”推进到了“机制开始生效”的阶段。
+
+---
+
+## 六、本窗口对实验结果的核心判断
+
+### 1. V2 的主要进展不在于 clean 指标绝对值，而在于机制开始生效
+
+本窗口最终判断，当前 V2 的最重要进展不是“clean 指标已经显著优于 V1”，而是：
+
+* gate 不再恒开
+* gate 出现明显方差
+* 不同传感器之间出现可辨别的 gate 差异
+* 可以通过时间序列进一步分析其动态行为
+
+这说明 V2 至少已经实现了其方法学上的核心目标：
+**不再简单整体放行 meas-stream，而是开始对 meas-stream 进行显式选择性利用。**
+
+### 2. 但当前还不能宣称 V2 在 clean 下稳定优于 V1
+
+尽管 gate 行为开始分化，但从目前本窗口的 clean 结果来看，还不能得出“V2 已经稳定优于 V1”的结论。更准确的说法是：
+
+* V2 的结构已跑通
+* V2 的 gate 机制已开始工作
+* 但 clean 指标上的优势仍需通过严格对照进一步验证
+
+这与当前实验推进计划的判断标准一致：当前阶段更应关注表示质量、节点行为可解释性和后续泛化潜力，而不是只盯 clean RMSE 的微小变化。
+
+### 3. V1→V2 的路线逻辑得到进一步支持
+
+V1 记录已经指出，V1 clean 下误差上升说明 “direct dual-stream” 并不能自动带来增益，后续必须围绕“如何选择性利用 meas-stream”推进。
+本窗口的 V2 结果进一步证明，这条路线不是空想：
+**一旦加入 soft gate，模型确实开始学出对 meas-stream 的差异化使用程度。**
+
+---
+
+## 七、本窗口中暴露并解决的工程问题
+
+本窗口在把 gate 时间序列接入训练与结果落盘的过程中，还处理了若干工程接口问题，这些问题本身也应记录，以免后续窗口重复踩坑：
+
+1. `experiments/train.py` 中误用了相对导入 `.evaluator`，但 `evaluator.py` 实际位于 `training/` 目录，导致 `ModuleNotFoundError`。后续统一改为脚本模式下的绝对导入，这与当前主干说明中的推荐导入方式一致。
+2. `experiments/train.py` 中 dataclass 名称与 `experiments/__init__.py` 中的导出名不一致，导致 `ImportError`。最终决定保留旧接口名 `TrainExperimentResult`，以避免影响现有导入链。
+3. `ResultManager.save_train_result(...)` 需要扩展参数 `quick_gnn_timeseries`，并配套保存 csv/json 文件，才能让 V2 的时间序列分析正式成为结果体系的一部分。
+
+这些修正的意义在于，V2 的实验不仅“能跑”，而且已经开始具备系统化记录与后续分析能力。
+
+---
+
+## 八、本窗口完成的新增分析能力
+
+本窗口最后还推进了 **gate 时间序列的可视化准备**：
+
+1. 已经实现 `gate_timeseries.csv` 的落盘；
+2. 已编写读取该 csv 的绘图脚本，能够绘制：
+
+   * `g_s1 ~ g_s4` 的时间曲线
+   * `w_s1 ~ w_s4` 的时间曲线
+   * 每个传感器 `gate vs weight` 的对照图
+   * 每个传感器 `gate-weight` 的散点图
+
+这意味着后续不再只能看 `mean_gate` 这种全局统计，而可以进入真正的时序行为分析阶段。
+
+---
+
+## 九、本窗口的结论性总结
+
+本窗口可以概括为：
+
+> 当前 V2（`post + meas + soft gate`）已完成从方案设计、代码接入、训练闭环到结果落盘的完整推进。工程上，V2 已经成功纳入现有主干，包括 model factory、preset、dataset store、quick evaluation 与 ResultManager；方法上，V2 明确遵守“第一版 gate 只作用于 meas-stream，不改 loss、不引入 temporal”的版本边界；实验上，V2 在 clean 场景下已表现出比初始冒烟更明显的 gate 分化现象，说明 selective mechanism 开始发挥作用。
+> 当前阶段最重要的收获，不是 clean 指标是否已经稳定超过 V1，而是：V2 已经从“结构正确”推进到了“机制可观测、行为可解释”的阶段。后续应围绕同数据集 V1 vs V2 严格对照、gate 时间曲线分析，以及在 asymmetric / pollution / fault test 等更能体现 selective fusion 价值的场景中继续验证。
+
+---

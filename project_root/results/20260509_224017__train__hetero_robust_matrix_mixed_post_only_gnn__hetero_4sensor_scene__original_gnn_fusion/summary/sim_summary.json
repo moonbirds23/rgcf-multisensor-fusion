@@ -1,0 +1,34 @@
+{
+  "scene_name": "hetero_4sensor_scene",
+  "fault_mode": "robust_matrix_mixed",
+  "t_shape": [
+    1201
+  ],
+  "x_truth_4d_shape": [
+    1201,
+    4
+  ],
+  "x_truth_5d_shape": [
+    1201,
+    5
+  ],
+  "xhat_shape": [
+    1201,
+    4,
+    4
+  ],
+  "Phat_shape": [
+    1201,
+    4,
+    4,
+    4
+  ],
+  "valid_mask_shape": [
+    1201,
+    4
+  ],
+  "fault_active_mask_shape": [
+    1201,
+    4
+  ]
+}

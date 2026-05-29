@@ -1,0 +1,11 @@
+{
+  "overall_rmse_pos": 1.9893337488174438,
+  "fault_window_rmse_pos": 2.5963075160980225,
+  "pre_fault_rmse_pos": 1.0400245189666748,
+  "post_fault_rmse_pos": 1.8575979471206665,
+  "overall_p95_error_pos": 3.6397736072540283,
+  "fault_window_p95_error_pos": 3.9596118927001953,
+  "overall_max_error_pos": 7.982223987579346,
+  "fault_window_max_error_pos": 7.982223987579346,
+  "recovery_time_error": 1.4000015258789062
+}

@@ -1,0 +1,17 @@
+{
+  "rmse_s1": 2.9323619831988155,
+  "rmse_s2": 5.028016445876801,
+  "rmse_s3": 2.4658264315060365,
+  "rmse_s4": 4.078933836123521,
+  "rmse_avg": 2.7508665344873773,
+  "rmse_ci_chain": 3.2194959352139985,
+  "rmse_ci_multi": 3.2201769036162813,
+  "rmse_waa_mm": 2.452008047648523,
+  "rmse_best_single": 2.4658264315060365,
+  "mean_weight_fault_avg": 0.25,
+  "mean_weight_normal_avg": 0.25,
+  "weight_separation_normal_minus_fault_avg": 0.0,
+  "mean_weight_fault_waa_mm": 0.34291346076295354,
+  "mean_weight_normal_waa_mm": 0.24153797461595627,
+  "weight_separation_normal_minus_fault_waa_mm": -0.10137548614699726
+}
