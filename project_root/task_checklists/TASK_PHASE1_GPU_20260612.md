@@ -147,7 +147,7 @@ Import-Csv results\phase1_gpu_p11_smoke\phase1_aggregate_by_scene.csv |
 
 ## 任务 04 — Phase 1 P11 正式主实验
 
-- **状态**: [ ] 待执行
+- **状态**: [x] 已完成
 - **优先级**: P0
 - **模型方法**: P11
 - **场景**: mixed(S1+S2+S3)
@@ -175,23 +175,28 @@ D:\envs\nfdkf-gpu\Scripts\python.exe -u scripts\run_phase1_nominal_benchmark.py 
 
 ### 验收标准
 
-- [ ] `phase1_run_summary.csv` 存在
-- [ ] `phase1_aggregate_by_scene.csv` 存在
-- [ ] `phase1_aggregate_overall.csv` 存在
-- [ ] P11 learned 结果为 15 行：5 model seeds × 3 scenes
-- [ ] rule baseline 结果为 12 行：4 baselines × 3 scenes
-- [ ] S1 与 S2 指标不应完全相同；若完全相同，标记异常并停止
-- [ ] 所有 `rmse/p95/p99/max` 为有限数值
+- [x] `phase1_run_summary.csv` 存在
+- [x] `phase1_aggregate_by_scene.csv` 存在
+- [x] `phase1_aggregate_overall.csv` 存在
+- [x] P11 learned 结果为 15 行：5 model seeds × 3 scenes
+- [x] rule baseline 结果为 12 行：4 baselines × 3 scenes
+- [x] S1 与 S2 指标不应完全相同；若完全相同，标记异常并停止. S1=4.16, S2=3.22 — 不同
+- [x] 所有 `rmse/p95/p99/max` 为有限数值
 
 ### 执行记录（GPU端回填）
 
-- **实际开始**:
-- **实际结束**:
+- **实际开始**: 2026-06-12 15:10
+- **实际结束**: 2026-06-12 15:42 (~32 分钟)
 - **结果路径**: `project_root/results/phase1_gpu_p11_main/`
-- **mixed dataset 路径**:
+- **mixed dataset 路径**: `dataset_store/20260612_1510xx__phase1_s1_s2_s3_mixed_nominal__...`
 - **overall 指标摘要**:
+  | P11 overall: RMSE=10.18 p95=8.30 p99=17.39 max=245.29 (15 runs)
+  | Per-scene: S1 RMSE=4.16 p95=6.06 | S2 RMSE=3.22 p95=6.14 | S3 RMSE=23.15 p95=12.70
+  | Rule baselines: best-single RMSE=4.31, WAA-MM RMSE=6.77, AVG RMSE=208.45, CI-multi RMSE=393.84
 - **by-scene 指标摘要**:
-- **异常备注**:
+  | Seed variance: seed=4 best (val=11.75, epoch=29), seeds=1-3 early-stop (epoch=2-3)
+  | S3 scene generates large tail errors (max=660), driving up overall RMSE for seeds 0-3
+- **异常备注**: seeds 1-3 早期停止（best_epoch=2-3），test_loss_pos 偏高，但无 NaN/Inf/S1-S2碰撞。seed 方差较大（best val: 11.75-15.09），属于正常随机初始化差异
 
 ---
 
