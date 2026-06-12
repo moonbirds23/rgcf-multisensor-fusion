@@ -113,6 +113,24 @@ def build_hetero_4sensor_layout() -> SensorLayoutConfig:
     )
 
 
+def build_phase1_clustered_hetero_4sensor_layout() -> SensorLayoutConfig:
+    """
+    Phase 1 S2 nominal layout.
+
+    Keep the S1 heterogeneous sensor types and nominal noise unchanged, but move
+    the sensors into a moderate single-side cluster. The geometry is harder than
+    the balanced layout without becoming an extreme degenerate case.
+    """
+    layout = deepcopy(build_hetero_4sensor_layout())
+
+    layout.sensors[0].position = (-850.0, -350.0)
+    layout.sensors[1].position = (-350.0, -250.0)
+    layout.sensors[2].position = (-700.0, 450.0)
+    layout.sensors[3].position = (-150.0, 350.0)
+
+    return layout
+
+
 def build_asymmetric_4sensor_layout() -> SensorLayoutConfig:
     """
     非对称布局：

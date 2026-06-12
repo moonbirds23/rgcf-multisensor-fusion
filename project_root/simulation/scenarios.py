@@ -13,6 +13,7 @@ from .sensor_layouts import (
     build_wide_baseline_4sensor_layout,
     build_asymmetric_4sensor_layout,
     build_hetero_4sensor_layout,
+    build_phase1_clustered_hetero_4sensor_layout,
 )
 
 
@@ -134,6 +135,45 @@ class Hetero4SensorScenario(BaseScenario):
 
     def build_sensor_layout(self) -> SensorLayoutConfig:
         return build_hetero_4sensor_layout()
+
+
+class Phase1BalancedHeteroNominalScenario(Hetero4SensorScenario):
+    """
+    Phase 1 S1: balanced heterogeneous nominal benchmark scene.
+
+    This is the current hetero 4-sensor GPS/Radar/AOA/UWB setup kept as the
+    standard nominal fusion reference.
+    """
+
+
+class Phase1ClusteredHeteroNominalScenario(Hetero4SensorScenario):
+    """
+    Phase 1 S2: clustered/single-side heterogeneous nominal benchmark scene.
+
+    Sensor types and noise are identical to S1; only the geometry is changed.
+    """
+
+    def build_sensor_layout(self) -> SensorLayoutConfig:
+        return build_phase1_clustered_hetero_4sensor_layout()
+
+
+class Phase1ManeuverHeteroNominalScenario(Hetero4SensorScenario):
+    """
+    Phase 1 S3: balanced heterogeneous layout with a more maneuvering target.
+    """
+
+    def build_motion_config(self) -> MotionConfig:
+        motion = deepcopy(self.cfg.motion)
+        motion.init_v = 20.0
+        motion.a_segmentA = 0.6
+        motion.yaw_rate_B_deg = 7.0
+        motion.yaw_rate_D_deg = -8.0
+        motion.yaw_rate_D_duration = 20.0
+        motion.s_disturb_amp_deg = 4.0
+        motion.s_disturb_period = 5.0
+        motion.sigma_a_base = 1.4
+        motion.sigma_a_turn = 2.5
+        return motion
 
 
 def scenario_artifacts_to_plain_dict(artifacts: ScenarioArtifacts) -> Dict:

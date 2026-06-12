@@ -7,7 +7,7 @@ import numpy as np
 
 from core.types import ExperimentBundle
 from simulation.scenario_factory import build_scenario_from_bundle
-from simulation.sensor_factory import build_sensors_from_bundle
+from simulation.sensor_factory import build_sensors_from_layout
 from simulation.faults import build_fault_manager_from_bundle
 from simulation.robustness_faults import materialize_robustness_fault_bundle
 from .ekf import CVEKF, EKFState
@@ -215,7 +215,7 @@ def run_single_simulation(bundle: ExperimentBundle) -> RunnerOutputs:
     scenario = build_scenario_from_bundle(bundle)
     artifacts = scenario.build()
 
-    sensors = build_sensors_from_bundle(bundle)
+    sensors = build_sensors_from_layout(artifacts.sensor_layout)
     fault_manager = build_fault_manager_from_bundle(bundle)
 
     truth_t = artifacts.truth.t
@@ -261,13 +261,9 @@ def run_single_simulation(bundle: ExperimentBundle) -> RunnerOutputs:
         tk = float(truth_t[k])
         x_true_k = truth_x4[k]
 
-        scene_spec = bundle.scene_spec
-        if scene_spec is None:
-            raise ValueError("bundle.scene_spec is None，说明 ExperimentBundle 装配阶段没有正确构建 SceneRuntimeSpec")
-
-        motion_cfg = scene_spec.config.motion
-        scene_T = float(scene_spec.T)
-        scene_dt = float(scene_spec.dt)
+        motion_cfg = artifacts.motion
+        scene_T = float(motion_cfg.T)
+        scene_dt = float(motion_cfg.dt)
 
         sigma_a = _sigma_a_for_time(
             t=tk,

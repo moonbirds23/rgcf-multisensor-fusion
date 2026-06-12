@@ -63,7 +63,24 @@ def _gate_arrays(sim: Dict[str, np.ndarray], feat: FeatureBundle, bundle: Experi
     fault = np.asarray(sim.get("fault_active_mask", np.zeros_like(valid)), dtype=np.float32)
     normal = float(getattr(bundle.model, "normal_gate_target", 0.8))
     bad = float(getattr(bundle.model, "fault_gate_target", 0.2))
-    return np.where(fault > 0.5, bad, normal).astype(np.float32) * valid, valid
+    target = np.where(fault > 0.5, bad, normal).astype(np.float32)
+
+    if bool(getattr(bundle.model, "use_error_aware_gate_target", False)):
+        xhat = np.asarray(sim.get("xhat"), dtype=np.float32)
+        truth = sim.get("x_truth_4d", sim.get("truth_4d", sim.get("x_true_4d")))
+        if truth is None:
+            raise KeyError("Error-aware gate target requires x_truth_4d/truth_4d/x_true_4d in sim.")
+        truth = np.asarray(truth, dtype=np.float32)
+        if xhat.ndim != 3 or truth.ndim != 2:
+            raise ValueError(f"Unexpected xhat/truth shapes for gate target: {xhat.shape}, {truth.shape}")
+        pos_err = np.linalg.norm(xhat[..., :2] - truth[:, None, :2], axis=-1)
+        tau = max(float(getattr(bundle.model, "gate_error_tau", 5.0)), 1e-6)
+        error_target = 1.0 / (1.0 + pos_err / tau)
+        target = np.minimum(target, error_target.astype(np.float32))
+        target_min = float(getattr(bundle.model, "gate_target_min", 0.1))
+        target = np.clip(target, target_min, normal)
+
+    return target.astype(np.float32) * valid, valid
 
 
 def build_dataset_from_sim(sim: Dict[str, np.ndarray], bundle: ExperimentBundle) -> FusionTimeStepDataset:

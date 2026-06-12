@@ -242,8 +242,12 @@ def evaluate_single_sim_fusion_with_timeseries(
         gm_arr = np.stack(gate_mask_all, axis=0)
 
     if gt_arr is not None:
-        fault_mask = gt_arr <= (float(getattr(bundle.model, "fault_gate_target", 0.2)) + 1e-6)
-        normal_mask = gt_arr >= (float(getattr(bundle.model, "normal_gate_target", 0.8)) - 1e-6)
+        fault_gate_threshold = 0.5 * (
+            float(getattr(bundle.model, "normal_gate_target", 0.8))
+            + float(getattr(bundle.model, "fault_gate_target", 0.2))
+        )
+        fault_mask = gt_arr < fault_gate_threshold
+        normal_mask = gt_arr >= fault_gate_threshold
         if gm_arr is not None:
             supervised = gm_arr > 0.5
             fault_mask = fault_mask & supervised

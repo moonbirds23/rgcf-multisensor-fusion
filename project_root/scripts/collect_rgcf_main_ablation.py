@@ -174,7 +174,7 @@ def collect_ablation(
             continue
 
         # Read test metrics from summary
-        summary_path = rdir / "summary" / "train_summary.json"
+        summary_path = rdir / "summary" / "training_summary.json"
         train_info = {}
         if summary_path.exists():
             train_info = load_json(summary_path)
@@ -272,7 +272,11 @@ def main() -> None:
         root = Path(args.results_root)
         post_only_dir = find_latest_result(root, "hetero_robust_matrix_mixed_post_only_gnn")
         dual_stream_dir = find_latest_result(root, "hetero_robust_matrix_mixed_dual_stream_plain_gnn")
-        rgcf_dir = find_latest_result(root, "hetero_robust_matrix_mixed_v2_rgcf")
+        rgcf_dir = (
+            find_latest_result(root, "hetero_robust_matrix_mixed_rgcf_v5")
+            or find_latest_result(root, "RGCF-V5-Reliability-Gated Covariance-Calibrated Fusion")
+            or find_latest_result(root, "hetero_robust_matrix_mixed_v2_rgcf")
+        )
         print(f"[auto-latest] A1: {post_only_dir}")
         print(f"[auto-latest] A3: {dual_stream_dir}")
         print(f"[auto-latest] A4: {rgcf_dir}")

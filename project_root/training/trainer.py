@@ -4,6 +4,8 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple
 from data.dataset_store import save_raw_dataset_store
 import copy
+import random
+import numpy as np
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -35,6 +37,11 @@ class TrainHistoryItem:
     train_loss_gate: float = 0.0
     train_loss_gate_prior: float = 0.0
     train_mean_gate: float = 0.0
+    train_loss_cov_prior: float = 0.0
+    train_loss_cov_sep: float = 0.0
+    train_mean_cov_scale: float = 0.0
+    train_loss_fault_weight: float = 0.0
+    train_mean_fault_weight: float = 0.0
 
 
 @dataclass
@@ -50,6 +57,20 @@ class TrainResult:
 
 def _build_seed_list(start: int, end: int) -> List[int]:
     return list(range(int(start), int(end) + 1))
+
+
+def _set_model_seed(seed: int | None):
+    if seed is None:
+        return
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def clone_bundle_with_runtime_seed(bundle: ExperimentBundle, seed: int) -> ExperimentBundle:
@@ -127,6 +148,7 @@ def train_fusion_model(
     - test 评估基于 best val model
     """
     device = torch.device(bundle.base.runtime.device)
+    _set_model_seed(getattr(bundle.train, "model_seed", None))
 
     epochs = int(bundle.train.epochs if epochs is None else epochs)
     lr = float(bundle.train.lr if lr is None else lr)
@@ -171,6 +193,7 @@ def train_fusion_model(
     use_temporal = bool(getattr(bundle.model, "use_temporal", False))
     window_size = int(getattr(bundle.model, "window_size", 6))
     use_gate_supervision = bool(getattr(bundle.model, "use_gate_supervision", False))
+    use_fault_weight_loss = float(getattr(bundle.model, "fault_weight_loss_weight", 0.0)) > 0.0
 
     def _build_ds(sims):
         if use_temporal:
@@ -189,7 +212,18 @@ def train_fusion_model(
     test_ds = _build_ds(test_sims)
     print(f"[dataset] test dataset ready, size={len(test_ds)}")
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=False)
+    loader_generator = None
+    if getattr(bundle.train, "model_seed", None) is not None:
+        loader_generator = torch.Generator()
+        loader_generator.manual_seed(int(bundle.train.model_seed))
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=False,
+        generator=loader_generator,
+    )
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, drop_last=False)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, drop_last=False)
 
@@ -214,6 +248,11 @@ def train_fusion_model(
         train_gate_sum = 0.0
         train_gate_prior_sum = 0.0
         train_mean_gate_sum = 0.0
+        train_cov_prior_sum = 0.0
+        train_cov_sep_sum = 0.0
+        train_mean_cov_scale_sum = 0.0
+        train_fault_weight_sum = 0.0
+        train_mean_fault_weight_sum = 0.0
         n = 0
 
         for batch in train_loader:
@@ -235,7 +274,7 @@ def train_fusion_model(
                 post_feat=post_feat,
                 mask=mask,
                 meas_feat=meas_feat,
-                return_weights=use_gate_supervision,
+                return_weights=use_gate_supervision or use_fault_weight_loss,
                 post_win=post_win,
                 meas_win=meas_win,
             )
@@ -255,10 +294,17 @@ def train_fusion_model(
                     gate=out.aux.get("gate", None),
                     gate_target=gate_target,
                     gate_mask=gate_mask,
+                    weights=out.weights,
+                    cov_scale=out.aux.get("cov_scale", None),
                     vel_weight=vel_weight,
                     gate_weight=float(getattr(bundle.model, "gate_supervision_weight", 0.05)),
                     gate_prior_weight=float(getattr(bundle.model, "gate_prior_weight", 0.005)),
                     gate_prior_mean=float(getattr(bundle.model, "gate_prior_mean", 0.75)),
+                    cov_prior_weight=float(getattr(bundle.model, "cov_prior_weight", 0.0)),
+                    cov_sep_weight=float(getattr(bundle.model, "cov_sep_weight", 0.0)),
+                    cov_fault_normal_margin=float(getattr(bundle.model, "cov_fault_normal_margin", 1.0)),
+                    fault_weight_loss_weight=float(getattr(bundle.model, "fault_weight_loss_weight", 0.0)),
+                    fault_weight_margin=float(getattr(bundle.model, "fault_weight_margin", 0.1)),
                     balanced_gate_loss=bool(getattr(bundle.model, "use_balanced_gate_loss", True)),
                     fault_gate_threshold=0.5 * (
                         float(getattr(bundle.model, "normal_gate_target", 0.8))
@@ -280,6 +326,11 @@ def train_fusion_model(
             train_gate_sum += info.get("loss_gate", 0.0) * bs
             train_gate_prior_sum += info.get("loss_gate_prior", 0.0) * bs
             train_mean_gate_sum += info.get("mean_gate", 0.0) * bs
+            train_cov_prior_sum += info.get("loss_cov_prior", 0.0) * bs
+            train_cov_sep_sum += info.get("loss_cov_sep", 0.0) * bs
+            train_mean_cov_scale_sum += info.get("mean_cov_scale", 0.0) * bs
+            train_fault_weight_sum += info.get("loss_fault_weight", 0.0) * bs
+            train_mean_fault_weight_sum += info.get("mean_fault_weight", 0.0) * bs
             n += bs
 
         train_metrics = {
@@ -289,6 +340,11 @@ def train_fusion_model(
             "loss_gate": train_gate_sum / max(n, 1),
             "loss_gate_prior": train_gate_prior_sum / max(n, 1),
             "mean_gate": train_mean_gate_sum / max(n, 1),
+            "loss_cov_prior": train_cov_prior_sum / max(n, 1),
+            "loss_cov_sep": train_cov_sep_sum / max(n, 1),
+            "mean_cov_scale": train_mean_cov_scale_sum / max(n, 1),
+            "loss_fault_weight": train_fault_weight_sum / max(n, 1),
+            "mean_fault_weight": train_mean_fault_weight_sum / max(n, 1),
         }
 
         val_metrics = evaluate_loader(
@@ -313,6 +369,11 @@ def train_fusion_model(
             train_loss_gate=float(train_metrics["loss_gate"]),
             train_loss_gate_prior=float(train_metrics["loss_gate_prior"]),
             train_mean_gate=float(train_metrics["mean_gate"]),
+            train_loss_cov_prior=float(train_metrics["loss_cov_prior"]),
+            train_loss_cov_sep=float(train_metrics["loss_cov_sep"]),
+            train_mean_cov_scale=float(train_metrics["mean_cov_scale"]),
+            train_loss_fault_weight=float(train_metrics["loss_fault_weight"]),
+            train_mean_fault_weight=float(train_metrics["mean_fault_weight"]),
         )
         history.append(asdict(history_item))
 
@@ -321,7 +382,11 @@ def train_fusion_model(
             gate_log = (
                 f", gate={train_metrics['loss_gate']:.6f}, "
                 f"prior={train_metrics['loss_gate_prior']:.6f}, "
-                f"mean_gate={train_metrics['mean_gate']:.4f}"
+                f"mean_gate={train_metrics['mean_gate']:.4f}, "
+                f"cov_prior={train_metrics['loss_cov_prior']:.6f}, "
+                f"cov_sep={train_metrics['loss_cov_sep']:.6f}, "
+                f"mean_cov={train_metrics['mean_cov_scale']:.4f}, "
+                f"fault_w={train_metrics['loss_fault_weight']:.6f}"
             )
         print(
             f"[Epoch {ep:03d}] "
