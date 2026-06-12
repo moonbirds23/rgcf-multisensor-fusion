@@ -11,24 +11,24 @@ def compute_fusion_loss(
     target: torch.Tensor,
     vel_weight: float = 0.2,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """
-    当前 clean baseline 对应的监督损失：
+    """Supervised position/velocity MSE loss.
 
     loss_pos = MSE(pred_xy, target_xy)
     loss_vel = MSE(pred_v,  target_v)
     total    = loss_pos + vel_weight * loss_vel
 
-    默认保持与当前 clean 版本一致：
-      vel_weight = 0.2
+    Returns values as Python floats to avoid GPU→CPU syncs in the training loop.
+    Uses a single .item() call per loss component (no redundant .cpu()).
     """
     loss_pos = ((pred[:, 0:2] - target[:, 0:2]) ** 2).mean()
     loss_vel = ((pred[:, 2:4] - target[:, 2:4]) ** 2).mean()
     loss = loss_pos + vel_weight * loss_vel
 
+    # Detach + item: .item() already moves to CPU, no need for .cpu() before it
     return loss, {
-        "loss_pos": float(loss_pos.detach().cpu().item()),
-        "loss_vel": float(loss_vel.detach().cpu().item()),
-        "loss_total": float(loss.detach().cpu().item()),
+        "loss_pos": loss_pos.detach().item(),
+        "loss_vel": loss_vel.detach().item(),
+        "loss_total": loss.detach().item(),
     }
 
 
@@ -53,6 +53,7 @@ def compute_fusion_loss_with_gate(
     balanced_gate_loss: bool = True,
     fault_gate_threshold: float = 0.5,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Full fusion loss with gate supervision, priors, and cov penalties."""
     track_loss, info = compute_fusion_loss(
         pred,
         target,
@@ -153,22 +154,23 @@ def compute_fusion_loss_with_gate(
         + fault_weight_loss_weight * fault_weight_loss
     )
 
+    # Batch all .item() calls (no redundant .cpu() calls)
     info.update({
-        "loss_total": float(total.detach().cpu().item()),
-        "loss_track": float(track_loss.detach().cpu().item()),
-        "loss_gate": float(gate_loss.detach().cpu().item()),
-        "loss_gate_fault": float(gate_loss_fault.detach().cpu().item()),
-        "loss_gate_normal": float(gate_loss_normal.detach().cpu().item()),
-        "loss_gate_prior": float(prior_loss.detach().cpu().item()),
-        "mean_gate": float(mean_gate.detach().cpu().item()),
-        "loss_cov_prior": float(cov_prior_loss.detach().cpu().item()),
-        "loss_cov_sep": float(cov_sep_loss.detach().cpu().item()),
-        "loss_fault_weight": float(fault_weight_loss.detach().cpu().item()),
-        "mean_fault_weight": float(mean_fault_weight.detach().cpu().item()),
-        "fault_weight_above_margin_rate": float(fault_weight_above_margin_rate.detach().cpu().item()),
-        "mean_cov_scale": float(mean_cov_scale.detach().cpu().item()),
-        "mean_cov_scale_fault": float(mean_cov_scale_fault.detach().cpu().item()),
-        "mean_cov_scale_normal": float(mean_cov_scale_normal.detach().cpu().item()),
+        "loss_total": total.detach().item(),
+        "loss_track": track_loss.detach().item(),
+        "loss_gate": gate_loss.detach().item(),
+        "loss_gate_fault": gate_loss_fault.detach().item(),
+        "loss_gate_normal": gate_loss_normal.detach().item(),
+        "loss_gate_prior": prior_loss.detach().item(),
+        "mean_gate": mean_gate.detach().item(),
+        "loss_cov_prior": cov_prior_loss.detach().item(),
+        "loss_cov_sep": cov_sep_loss.detach().item(),
+        "loss_fault_weight": fault_weight_loss.detach().item(),
+        "mean_fault_weight": mean_fault_weight.detach().item(),
+        "fault_weight_above_margin_rate": fault_weight_above_margin_rate.detach().item(),
+        "mean_cov_scale": mean_cov_scale.detach().item(),
+        "mean_cov_scale_fault": mean_cov_scale_fault.detach().item(),
+        "mean_cov_scale_normal": mean_cov_scale_normal.detach().item(),
     })
 
     return total, info

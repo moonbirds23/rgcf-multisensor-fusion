@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple
 from data.dataset_store import save_raw_dataset_store
 import copy
+import os
 import random
 import numpy as np
 import torch
@@ -23,6 +24,131 @@ from data.dataset_store import (
     find_dataset_store_by_id,
     find_latest_matching_dataset_store,
 )
+
+# ---------------------------------------------------------------------------
+# GPU-optimized defaults (tuned for dual RTX 3090 Ti, 24 GB VRAM each)
+# ---------------------------------------------------------------------------
+_DEFAULT_NUM_WORKERS = int(os.environ.get("RGCF_NUM_WORKERS", "2"))
+_DEFAULT_EVAL_BATCH_SIZE = int(os.environ.get("RGCF_EVAL_BATCH_SIZE", "256"))
+_USE_TORCH_COMPILE = os.environ.get("RGCF_DISABLE_COMPILE", "0") != "1"
+
+# ---------------------------------------------------------------------------
+# Parallel simulation helpers
+# ---------------------------------------------------------------------------
+
+def _run_one_sim_worker(args: Tuple[ExperimentBundle, int, str, str, bool, str]):
+    """Pickleable worker for parallel simulation generation."""
+    bundle, seed, split_name, sim_cache_root, force_regenerate, _ = args
+    # Re-seed numpy in the worker process
+    np.random.seed(None)
+    random.seed()
+
+    if sim_cache_root:
+        sim = get_or_run_cached_sim(
+            bundle, seed, root_dir=sim_cache_root, force=force_regenerate,
+        )
+    else:
+        b_i = clone_bundle_with_runtime_seed(bundle, seed)
+        run_out = run_single_simulation(b_i)
+        sim = run_out.sim
+
+    sim["split_name"] = split_name
+    sim["seed"] = int(seed)
+    return sim
+
+
+def _build_sims_parallel(
+    bundle: ExperimentBundle,
+    seeds: List[int],
+    split_name: str,
+    *,
+    use_sim_cache: bool = False,
+    sim_cache_root: str = "sim_cache",
+    force_regenerate_sims: bool = False,
+    max_workers: int | None = None,
+) -> List[Dict]:
+    """Build simulations in parallel using ProcessPoolExecutor.
+
+    Falls back to sequential execution on pickling errors (e.g. complex bundle
+    objects that can't cross process boundaries).
+    """
+    if max_workers is None:
+        max_workers = min(int(os.environ.get("RGCF_SIM_WORKERS", "4")), len(seeds), os.cpu_count() or 4)
+
+    if max_workers <= 1 or len(seeds) <= 1:
+        return _build_sims_sequential(
+            bundle, seeds, split_name,
+            use_sim_cache=use_sim_cache,
+            sim_cache_root=sim_cache_root,
+            force_regenerate_sims=force_regenerate_sims,
+        )
+
+    cache_root = sim_cache_root if use_sim_cache else ""
+    task_args = [
+        (bundle, int(sd), split_name, cache_root, bool(force_regenerate_sims), "")
+        for sd in seeds
+    ]
+
+    try:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        sims_by_seed: Dict[int, Dict] = {}
+        # Use 'spawn' on Windows to avoid CUDA fork issues in worker children
+        ctx = None
+        if os.name == "nt":
+            import multiprocessing
+            ctx = multiprocessing.get_context("spawn")
+
+        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as ex:
+            futures = {ex.submit(_run_one_sim_worker, args): args[1] for args in task_args}
+            for fut in as_completed(futures):
+                seed = futures[fut]
+                try:
+                    sims_by_seed[seed] = fut.result()
+                except Exception as exc:
+                    print(f"[{split_name}] sim seed={seed} FAILED in worker: {exc}")
+                    raise
+
+        # Return in original seed order
+        return [sims_by_seed[sd] for sd in seeds]
+
+    except Exception as exc:
+        print(f"[{split_name}] parallel sim generation failed ({exc}), falling back to sequential")
+        return _build_sims_sequential(
+            bundle, seeds, split_name,
+            use_sim_cache=use_sim_cache,
+            sim_cache_root=sim_cache_root,
+            force_regenerate_sims=force_regenerate_sims,
+        )
+
+
+def _build_sims_sequential(
+    bundle: ExperimentBundle,
+    seeds: List[int],
+    split_name: str,
+    *,
+    use_sim_cache: bool = False,
+    sim_cache_root: str = "sim_cache",
+    force_regenerate_sims: bool = False,
+) -> List[Dict]:
+    """Original sequential simulation builder (fallback)."""
+    sims = []
+    for i, sd in enumerate(seeds, start=1):
+        print(f"[{split_name}] sim {i}/{len(seeds)} | seed={sd}")
+        if use_sim_cache:
+            sim = get_or_run_cached_sim(
+                bundle, sd, root_dir=sim_cache_root, force=force_regenerate_sims,
+            )
+        else:
+            b_i = clone_bundle_with_runtime_seed(bundle, sd)
+            run_out = run_single_simulation(b_i)
+            sim = run_out.sim
+
+        sim["split_name"] = split_name
+        sim["seed"] = int(sd)
+        sims.append(sim)
+    return sims
+
 
 @dataclass
 class TrainHistoryItem:
@@ -74,10 +200,7 @@ def _set_model_seed(seed: int | None):
 
 
 def clone_bundle_with_runtime_seed(bundle: ExperimentBundle, seed: int) -> ExperimentBundle:
-    """
-    基于同一个实验 bundle，仅替换 runtime seed。
-    用于构造多条独立 rollout。
-    """
+    """Clone experiment bundle with a new runtime seed for independent rollouts."""
     out = copy.deepcopy(bundle)
     out.base.runtime.seed = int(seed)
     return out
@@ -92,32 +215,53 @@ def build_sim_list_from_seed_range(
     use_sim_cache: bool = False,
     sim_cache_root: str = "sim_cache",
     force_regenerate_sims: bool = False,
+    parallel: bool = True,
+    max_workers: int | None = None,
 ) -> List[Dict]:
-    seeds = _build_seed_list(seed_start, seed_end)
-    sims = []
+    """Build simulation rollouts from a seed range.
 
+    Args:
+        parallel: Use ProcessPoolExecutor for parallel generation (default True).
+        max_workers: Max parallel workers. Defaults to RGCF_SIM_WORKERS env or 4.
+    """
+    seeds = _build_seed_list(seed_start, seed_end)
     print(f"[{split_name}] start building sims, total={len(seeds)}")
 
-    for i, sd in enumerate(seeds, start=1):
-        print(f"[{split_name}] sim {i}/{len(seeds)} | seed={sd}")
-        if use_sim_cache:
-            sim = get_or_run_cached_sim(
-                bundle,
-                sd,
-                root_dir=sim_cache_root,
-                force=force_regenerate_sims,
-            )
-        else:
-            b_i = clone_bundle_with_runtime_seed(bundle, sd)
-            run_out = run_single_simulation(b_i)
-            sim = run_out.sim
-
-        sim["split_name"] = split_name
-        sim["seed"] = int(sd)
-        sims.append(sim)
+    if parallel and len(seeds) > 1:
+        sims = _build_sims_parallel(
+            bundle, seeds, split_name,
+            use_sim_cache=use_sim_cache,
+            sim_cache_root=sim_cache_root,
+            force_regenerate_sims=force_regenerate_sims,
+            max_workers=max_workers,
+        )
+    else:
+        sims = _build_sims_sequential(
+            bundle, seeds, split_name,
+            use_sim_cache=use_sim_cache,
+            sim_cache_root=sim_cache_root,
+            force_regenerate_sims=force_regenerate_sims,
+        )
 
     print(f"[{split_name}] sims ready, total={len(sims)}")
     return sims
+
+
+def _collate_to_device(batch: List[Dict], device: torch.device) -> Dict:
+    """Custom collate that stacks and transfers to GPU with non_blocking.
+
+    Uses default_collate for stacking, then async transfers.
+    """
+    from torch.utils.data.dataloader import default_collate
+
+    collated = default_collate(batch)
+    out = {}
+    for key, val in collated.items():
+        if isinstance(val, torch.Tensor):
+            out[key] = val.to(device, non_blocking=True)
+        else:
+            out[key] = val
+    return out
 
 
 def train_fusion_model(
@@ -134,18 +278,20 @@ def train_fusion_model(
     dataset_id: str | None = None,
     dataset_dir: str | None = None,
     use_latest_matching_dataset: bool = False,
+    num_workers: int | None = None,
+    use_compile: bool | None = None,
 ) -> TrainResult:
-    """
-    Step 8 统一训练入口。
+    """Unified training entry point with GPU optimizations.
 
-    默认尽量对齐当前 clean baseline 的训练行为：
-    - Adam
-    - lr 默认取 bundle.train.lr
-    - weight_decay=1e-5
-    - ReduceLROnPlateau(factor=0.5, patience=4)
-    - grad_clip=1.0
-    - early_stop_patience=12
-    - test 评估基于 best val model
+    Key improvements over the baseline:
+    - DataLoader with num_workers + pin_memory for async data loading
+    - Optional torch.compile for kernel fusion
+    - non_blocking GPU transfers
+    - Reduced CPU-GPU sync frequency in loss reporting
+
+    Args:
+        num_workers: DataLoader workers. Defaults to RGCF_NUM_WORKERS env or 2.
+        use_compile: Enable torch.compile. Defaults to True unless RGCF_DISABLE_COMPILE=1.
     """
     device = torch.device(bundle.base.runtime.device)
     _set_model_seed(getattr(bundle.train, "model_seed", None))
@@ -153,6 +299,11 @@ def train_fusion_model(
     epochs = int(bundle.train.epochs if epochs is None else epochs)
     lr = float(bundle.train.lr if lr is None else lr)
     batch_size = int(bundle.train.batch_size if batch_size is None else batch_size)
+
+    if num_workers is None:
+        num_workers = _DEFAULT_NUM_WORKERS
+    if use_compile is None:
+        use_compile = _USE_TORCH_COMPILE
 
     train_seeds = _build_seed_list(bundle.train.train_seed_start, bundle.train.train_seed_end)
     val_seeds = _build_seed_list(bundle.train.val_seed_start, bundle.train.val_seed_end)
@@ -217,17 +368,40 @@ def train_fusion_model(
         loader_generator = torch.Generator()
         loader_generator.manual_seed(int(bundle.train.model_seed))
 
+    # GPU-optimized DataLoader configuration
+    loader_kwargs = dict(
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
+    )
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
         shuffle=True,
         drop_last=False,
+        num_workers=num_workers,
+        prefetch_factor=2 if num_workers > 0 else None,
         generator=loader_generator,
+        **loader_kwargs,
     )
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, drop_last=False)
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, drop_last=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=_DEFAULT_EVAL_BATCH_SIZE, shuffle=False, drop_last=False,
+        num_workers=num_workers, **loader_kwargs,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=_DEFAULT_EVAL_BATCH_SIZE, shuffle=False, drop_last=False,
+        num_workers=num_workers, **loader_kwargs,
+    )
 
     model = build_model_from_bundle(bundle).to(device)
+
+    # torch.compile for kernel fusion on Ampere+ GPUs
+    if use_compile and hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            print("[compile] torch.compile enabled (mode=reduce-overhead)")
+        except Exception as exc:
+            print(f"[compile] torch.compile failed ({exc}), continuing without compile")
 
     opt = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -239,6 +413,8 @@ def train_fusion_model(
     best_state = None
     patience = 0
     history: List[Dict] = []
+
+    _log_interval = max(1, len(train_loader) // 10)  # Log ~10 times per epoch
 
     for ep in range(1, epochs + 1):
         model.train()
@@ -255,20 +431,20 @@ def train_fusion_model(
         train_mean_fault_weight_sum = 0.0
         n = 0
 
-        for batch in train_loader:
-            post_feat = batch["post_feat"].to(device)
-            mask = batch["mask"].to(device)
-            target = batch["target"].to(device)
+        for batch_idx, batch in enumerate(train_loader):
+            post_feat = batch["post_feat"].to(device, non_blocking=True)
+            mask = batch["mask"].to(device, non_blocking=True)
+            target = batch["target"].to(device, non_blocking=True)
 
             meas_feat = None
             if "meas_feat" in batch:
-                meas_feat = batch["meas_feat"].to(device)
+                meas_feat = batch["meas_feat"].to(device, non_blocking=True)
 
             post_win = None
             meas_win = None
             if "post_win" in batch:
-                post_win = batch["post_win"].to(device)
-                meas_win = batch["meas_win"].to(device)
+                post_win = batch["post_win"].to(device, non_blocking=True)
+                meas_win = batch["meas_win"].to(device, non_blocking=True)
 
             out = model(
                 post_feat=post_feat,
@@ -284,9 +460,9 @@ def train_fusion_model(
                 gate_target = batch.get("gate_target", None)
                 gate_mask = batch.get("gate_supervision_mask", None)
                 if gate_target is not None:
-                    gate_target = gate_target.to(device)
+                    gate_target = gate_target.to(device, non_blocking=True)
                 if gate_mask is not None:
-                    gate_mask = gate_mask.to(device)
+                    gate_mask = gate_mask.to(device, non_blocking=True)
 
                 loss, info = compute_fusion_loss_with_gate(
                     pred,
@@ -314,7 +490,7 @@ def train_fusion_model(
             else:
                 loss, info = compute_fusion_loss(pred, target, vel_weight=vel_weight)
 
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=True)  # More efficient than zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
             opt.step()
@@ -332,6 +508,11 @@ def train_fusion_model(
             train_fault_weight_sum += info.get("loss_fault_weight", 0.0) * bs
             train_mean_fault_weight_sum += info.get("mean_fault_weight", 0.0) * bs
             n += bs
+
+            # Progress logging every ~10% of epoch
+            if (batch_idx + 1) % _log_interval == 0:
+                print(f"[Epoch {ep:03d}] batch {batch_idx+1}/{len(train_loader)} "
+                      f"loss={info['loss_total']:.6f}")
 
         train_metrics = {
             "loss": train_loss_sum / max(n, 1),

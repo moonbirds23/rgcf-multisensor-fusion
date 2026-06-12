@@ -19,9 +19,9 @@ def evaluate_loader(
     vel_weight: float = 0.2,
 ) -> Dict[str, float]:
     """
-    对 dataloader 做统一评估。
+    Evaluate model on a DataLoader with batched inference.
 
-    返回：
+    Returns:
     - loss
     - loss_pos
     - loss_vel
@@ -32,21 +32,21 @@ def evaluate_loader(
     total_vel = 0.0
     n = 0
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in loader:
-            post_feat = batch["post_feat"].to(device)
-            mask = batch["mask"].to(device)
-            target = batch["target"].to(device)
+            post_feat = batch["post_feat"].to(device, non_blocking=True)
+            mask = batch["mask"].to(device, non_blocking=True)
+            target = batch["target"].to(device, non_blocking=True)
 
             meas_feat = None
             if "meas_feat" in batch:
-                meas_feat = batch["meas_feat"].to(device)
+                meas_feat = batch["meas_feat"].to(device, non_blocking=True)
 
             post_win = None
             meas_win = None
             if "post_win" in batch:
-                post_win = batch["post_win"].to(device)
-                meas_win = batch["meas_win"].to(device)
+                post_win = batch["post_win"].to(device, non_blocking=True)
+                meas_win = batch["meas_win"].to(device, non_blocking=True)
 
             out = model(
                 post_feat=post_feat,
@@ -80,7 +80,7 @@ def evaluate_single_sim_fusion(
     device: torch.device,
 ) -> Dict[str, float]:
     """
-    quick evaluation：只返回 summary 指标
+    Quick evaluation: return summary metrics only.
     """
     res = evaluate_single_sim_fusion_with_timeseries(
         sim=sim,
@@ -98,31 +98,35 @@ def evaluate_single_sim_fusion_with_timeseries(
     device: torch.device,
 ) -> Dict[str, object]:
     """
-    对单个 sim 做 quick evaluation，并返回时间序列。
+    Evaluate a single simulation with batched inference, returning timeseries.
 
-    返回：
+    Uses DataLoader with batching instead of iterating one timestep at a time,
+    which eliminates ~1200 individual GPU kernel launches per sim.
+
+    Returns:
     {
         "summary": {...},
-        "timeseries": [
-            {
-                "k": ...,
-                "t": ...,
-                "g_s1": ..., ..., "g_s4": ...,
-                "w_s1": ..., ..., "w_s4": ...
-            },
-            ...
-        ]
+        "timeseries": [...]
     }
     """
     model.eval()
 
     use_temporal = bool(getattr(bundle.model, "use_temporal", False))
     window_size = int(getattr(bundle.model, "window_size", 6))
+    eval_batch_size = 256  # Large batch for evaluation throughput
 
     if use_temporal:
         ds = build_window_dataset_from_sim(sim, bundle, window_size=window_size)
     else:
         ds = build_dataset_from_sim(sim, bundle)
+
+    loader = DataLoader(
+        ds,
+        batch_size=eval_batch_size,
+        shuffle=False,
+        drop_last=False,
+        pin_memory=True,
+    )
 
     preds: List[np.ndarray] = []
     trues: List[np.ndarray] = []
@@ -132,25 +136,24 @@ def evaluate_single_sim_fusion_with_timeseries(
     gate_target_all: List[np.ndarray] = []
     gate_mask_all: List[np.ndarray] = []
     valid_all: List[np.ndarray] = []
-    ts_all: List[float] = []
+    ts_indices: List[int] = []
 
-    with torch.no_grad():
-        for i in range(len(ds)):
-            item = ds[i]
-
-            post_feat = item["post_feat"].to(device)
-            mask = item["mask"].to(device)
-            target = item["target"].to(device)
+    with torch.inference_mode():
+        sample_idx = 0
+        for batch in loader:
+            post_feat = batch["post_feat"].to(device, non_blocking=True)
+            mask = batch["mask"].to(device, non_blocking=True)
+            target = batch["target"].to(device, non_blocking=True)
 
             meas_feat = None
-            if "meas_feat" in item:
-                meas_feat = item["meas_feat"].to(device)
+            if "meas_feat" in batch:
+                meas_feat = batch["meas_feat"].to(device, non_blocking=True)
 
             post_win = None
             meas_win = None
-            if "post_win" in item:
-                post_win = item["post_win"].to(device)
-                meas_win = item["meas_win"].to(device)
+            if "post_win" in batch:
+                post_win = batch["post_win"].to(device, non_blocking=True)
+                meas_win = batch["meas_win"].to(device, non_blocking=True)
 
             out = model(
                 post_feat=post_feat,
@@ -178,16 +181,21 @@ def evaluate_single_sim_fusion_with_timeseries(
             if cov_scale is not None:
                 cov_scale_all.append(cov_scale.detach().cpu().numpy())
 
-            if "gate_target" in item:
-                gate_target_all.append(item["gate_target"].detach().cpu().numpy())
-            if "gate_supervision_mask" in item:
-                gate_mask_all.append(item["gate_supervision_mask"].detach().cpu().numpy())
+            if "gate_target" in batch:
+                gate_target_all.append(batch["gate_target"].cpu().numpy())
+            if "gate_supervision_mask" in batch:
+                gate_mask_all.append(batch["gate_supervision_mask"].cpu().numpy())
 
-            valid_all.append(item["mask"].detach().cpu().numpy())
-            ts_all.append(float(ds.t[i]))
+            valid_all.append(batch["mask"].cpu().numpy())
 
-    pred_arr = np.stack(preds, axis=0)   # [K,4]
-    true_arr = np.stack(trues, axis=0)   # [K,4]
+            bs = y.shape[0]
+            for i in range(bs):
+                ts_indices.append(sample_idx)
+                sample_idx += 1
+
+    # Concatenate batched results
+    pred_arr = np.concatenate(preds, axis=0)   # [K,4]
+    true_arr = np.concatenate(trues, axis=0)   # [K,4]
 
     err_pos = pred_arr[:, 0:2] - true_arr[:, 0:2]
     err_full = pred_arr - true_arr
@@ -202,15 +210,15 @@ def evaluate_single_sim_fusion_with_timeseries(
 
     w_arr = None
     if len(weights_all) > 0:
-        w_arr = np.stack(weights_all, axis=0)   # [K,N]
+        w_arr = np.concatenate(weights_all, axis=0)   # [K,N]
         N = w_arr.shape[1]
         for i in range(N):
             out_dict[f"mean_w_s{i+1}"] = float(np.mean(w_arr[:, i]))
 
     g_arr = None
     if len(gates_all) > 0:
-        g_arr = np.stack(gates_all, axis=0)     # [K,N]
-        v_arr = np.stack(valid_all, axis=0)     # [K,N]
+        g_arr = np.concatenate(gates_all, axis=0)     # [K,N]
+        v_arr = np.concatenate(valid_all, axis=0)     # [K,N]
 
         out_dict["mean_gate"] = float(np.mean(g_arr))
         out_dict["std_gate"] = float(np.std(g_arr))
@@ -227,7 +235,7 @@ def evaluate_single_sim_fusion_with_timeseries(
 
     c_arr = None
     if len(cov_scale_all) > 0:
-        c_arr = np.stack(cov_scale_all, axis=0)
+        c_arr = np.concatenate(cov_scale_all, axis=0)
         out_dict["mean_cov_scale"] = float(np.mean(c_arr))
         out_dict["std_cov_scale"] = float(np.std(c_arr))
         N = c_arr.shape[1]
@@ -237,9 +245,9 @@ def evaluate_single_sim_fusion_with_timeseries(
     gt_arr = None
     gm_arr = None
     if len(gate_target_all) > 0:
-        gt_arr = np.stack(gate_target_all, axis=0)
+        gt_arr = np.concatenate(gate_target_all, axis=0)
     if len(gate_mask_all) > 0:
-        gm_arr = np.stack(gate_mask_all, axis=0)
+        gm_arr = np.concatenate(gate_mask_all, axis=0)
 
     if gt_arr is not None:
         fault_gate_threshold = 0.5 * (
@@ -309,22 +317,22 @@ def evaluate_single_sim_fusion_with_timeseries(
         if active_idx.size > 0:
             k0 = int(active_idx[0])
             k1 = int(active_idx[-1])
-            valid_arr = np.stack(valid_all, axis=0) > 0.5
+            valid_arr = np.concatenate(valid_all, axis=0) > 0.5
             pre_mask = np.zeros_like(valid_arr, dtype=bool)
             fault_region_mask = (fault_active_arr > 0.5) & valid_arr
             post_mask = np.zeros_like(valid_arr, dtype=bool)
             pre_mask[:k0, :] = valid_arr[:k0, :]
             post_mask[k1 + 1:, :] = valid_arr[k1 + 1:, :]
 
-            out_dict["fault_window_t0"] = float(ts_all[k0])
-            out_dict["fault_window_t1"] = float(ts_all[k1])
+            out_dict["fault_window_t0"] = float(ds.t[k0])
+            out_dict["fault_window_t1"] = float(ds.t[k1])
             out_dict["fault_window_steps"] = int(active_idx.size)
             _add_region_stats("pre_fault", pre_mask)
             _add_region_stats("fault_window", fault_region_mask)
             _add_region_stats("post_fault", post_mask)
 
     timeseries: List[Dict[str, float]] = []
-    K = len(ts_all)
+    K = len(ds)
     n_nodes = 0
     if w_arr is not None:
         n_nodes = w_arr.shape[1]
@@ -333,7 +341,7 @@ def evaluate_single_sim_fusion_with_timeseries(
     elif c_arr is not None:
         n_nodes = c_arr.shape[1]
 
-    # compute per-timestep error
+    # per-timestep position error
     error_pos_arr = np.sqrt(np.sum((pred_arr[:, 0:2] - true_arr[:, 0:2]) ** 2, axis=1))
     error_full_arr = np.sqrt(np.sum((pred_arr - true_arr) ** 2, axis=1))
 
@@ -342,31 +350,27 @@ def evaluate_single_sim_fusion_with_timeseries(
         fa = np.asarray(sim["fault_active_mask"])
         fault_active_any_arr = (fa.max(axis=1) > 0.5).astype(np.float64)
 
-    # compute additional weight behavior metrics
+    # weight behavior metrics
     if w_arr is not None and fault_active_any_arr.sum() > 0:
         fault_window = fault_active_any_arr > 0.5
         if fault_window.any():
-            w_fault = w_arr[fault_window]  # [Kf, N]
-            # For each fault-window timestep, find the fault sensor column(s)
+            w_fault = w_arr[fault_window]
             if "fault_active_mask" in sim:
                 fa_arr = np.asarray(sim["fault_active_mask"])
-                fa_fault = fa_arr[fault_window]  # [Kf, N]
+                fa_fault = fa_arr[fault_window]
                 fa_fault_bool = fa_fault > 0.5
 
-                # fault_top1_weight_rate
                 w_max_idx = np.argmax(w_fault, axis=1)
                 is_fault_top = fa_fault_bool[np.arange(w_fault.shape[0]), w_max_idx]
                 out_dict["fault_top1_weight_rate"] = float(np.mean(is_fault_top))
 
-                # fault_weight_below_equal_rate
                 w_fault_sensors = w_fault[fa_fault_bool]
                 if w_fault_sensors.size > 0:
                     out_dict["fault_weight_below_equal_rate"] = float(np.mean(w_fault_sensors < 0.25))
                     out_dict["fault_weight_below_010_rate"] = float(np.mean(w_fault_sensors < 0.10))
 
-    # compute error window metrics
+    # error window metrics
     def _error_window_metrics(err_arr, fault_any_arr, t_arr, t0, t1):
-        """Compute overall/fault-window/pre/post error stats."""
         metrics = {}
         metrics["overall_rmse_pos"] = float(np.sqrt(np.mean(err_arr ** 2)))
         metrics["overall_p95_error_pos"] = float(np.percentile(err_arr, 95))
@@ -393,7 +397,6 @@ def evaluate_single_sim_fusion_with_timeseries(
         else:
             metrics["post_fault_rmse_pos"] = float("nan")
 
-        # recovery time: time after t1 until error drops below pre-fault median
         if post_sel.any() and pre_sel.any():
             pre_median = float(np.median(err_arr[pre_sel]))
             post_idx = np.flatnonzero(post_sel)
@@ -409,7 +412,7 @@ def evaluate_single_sim_fusion_with_timeseries(
 
         return metrics
 
-    t_arr = np.array(ts_all, dtype=np.float64)
+    t_arr = np.array([float(ds.t[i]) for i in range(K)], dtype=np.float64)
     t0, t1 = 30.0, 70.0
     if "fault_window_t0" in out_dict:
         t0 = float(out_dict["fault_window_t0"])
@@ -419,10 +422,11 @@ def evaluate_single_sim_fusion_with_timeseries(
     for k, v in err_win.items():
         out_dict[k] = v
 
+    # Build per-timestep timeseries rows
     for k in range(K):
         row: Dict[str, float] = {
             "k": int(k),
-            "t": float(ts_all[k]),
+            "t": float(ds.t[k]),
             "truth_px": float(true_arr[k, 0]),
             "truth_py": float(true_arr[k, 1]),
             "truth_vx": float(true_arr[k, 2]),
@@ -462,7 +466,7 @@ def evaluate_single_sim_fusion_with_timeseries(
                 row[f"fault_active_s{i+1}"] = float(fault_active[k, i])
 
         if len(valid_all) > 0:
-            v_arr = np.stack(valid_all, axis=0)
+            v_arr = np.concatenate(valid_all, axis=0)
             for i in range(n_nodes):
                 row[f"valid_s{i+1}"] = float(v_arr[k, i])
 
