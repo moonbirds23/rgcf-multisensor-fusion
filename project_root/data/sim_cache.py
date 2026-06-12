@@ -6,7 +6,7 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-SIM_SCHEMA_VERSION = "raw_sim_v3_balanced_rgcf"
+SIM_SCHEMA_VERSION = "raw_sim_v4_phase1_artifact_layout"
 
 
 def _safe(x): return str(x).replace("\\", "_").replace("/", "_").replace(" ", "_").replace(":", "_")

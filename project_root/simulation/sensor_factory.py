@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import List
 
 from core.types import ExperimentBundle
-from configs.scenario_config import SensorNodeConfig
+from configs.scenario_config import SensorLayoutConfig, SensorNodeConfig
 from .sensors import (
     SensorBase,
     GPS2D,
@@ -14,17 +14,24 @@ from .sensors import (
 )
 
 
-def build_sensors_from_bundle(bundle: ExperimentBundle) -> List[SensorBase]:
+def build_sensors_from_layout(layout: SensorLayoutConfig) -> List[SensorBase]:
     """
-    从 ExperimentBundle 中读取 scene layout，并构造 nominal sensors。
+    从明确的 scene layout 构造 nominal sensors。
     """
-    sensors_cfg = deepcopy(bundle.scenario.sensor_layout.sensors)
+    sensors_cfg = deepcopy(layout.sensors)
     sensors: List[SensorBase] = []
 
     for node in sensors_cfg:
         sensors.append(build_single_sensor(node))
 
     return sensors
+
+
+def build_sensors_from_bundle(bundle: ExperimentBundle) -> List[SensorBase]:
+    """
+    从 ExperimentBundle 中读取 scene layout，并构造 nominal sensors。
+    """
+    return build_sensors_from_layout(bundle.scenario.sensor_layout)
 
 
 def build_single_sensor(node: SensorNodeConfig) -> SensorBase:

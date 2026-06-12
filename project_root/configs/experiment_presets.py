@@ -128,6 +128,69 @@ def _rgcf(model: ModelConfig) -> ModelConfig:
     return out
 
 
+def _rgcf_v5(model: ModelConfig) -> ModelConfig:
+    out = _rgcf(model)
+    out.fusion_variant = "RGCF-V5-Reliability-Gated Covariance-Calibrated Fusion"
+    out.use_cov_in_fusion = True
+    out.cov_weight_beta = 1.0
+    out.cov_prior_weight = 0.005
+    out.cov_sep_weight = 0.01
+    out.cov_fault_normal_margin = 1.0
+    return out
+
+
+def _rgcf_v5_peer(model: ModelConfig) -> ModelConfig:
+    out = _rgcf_v5(model)
+    out.fusion_variant = "RGCF-V5+ Peer-Consistency Reliability Fusion"
+    out.use_peer_consistency_features = True
+    out.post_in_dim = 15
+    out.base_logit_temperature = 2.0
+    out.weight_uniform_mix = 0.05
+    out.fault_weight_loss_weight = 0.1
+    out.fault_weight_margin = 0.1
+    return out
+
+
+def _disable_cov(model: ModelConfig) -> ModelConfig:
+    out = deepcopy(model)
+    out.use_cov_calibration = False
+    out.use_cov_in_fusion = False
+    out.cov_weight_beta = 0.0
+    out.cov_prior_weight = 0.0
+    out.cov_sep_weight = 0.0
+    return out
+
+
+def _p4_full_gate_no_cov(model: ModelConfig) -> ModelConfig:
+    out = _disable_cov(_rgcf(model))
+    out.use_gate_on_meas_feature = True
+    out.gate_weight_alpha = 1.0
+    out.fusion_variant = "P4 Full Gate without Covariance Path"
+    return out
+
+
+def _p11_feature_stable_reliability_no_cov(model: ModelConfig) -> ModelConfig:
+    out = _disable_cov(_rgcf(model))
+    out.use_meas_in_representation = False
+    out.use_gate_on_meas_feature = False
+    out.gate_weight_alpha = 1.0
+    out.base_logit_temperature = 2.0
+    out.weight_uniform_mix = 0.05
+    out.fusion_variant = "Feature-Stable Reliability-Weighted Fusion without Measurement Representation or Covariance Path"
+    return out
+
+
+def _p12_recovery_aware_full_gate_no_cov(model: ModelConfig) -> ModelConfig:
+    out = _p4_full_gate_no_cov(model)
+    out.use_error_aware_gate_target = True
+    out.gate_error_tau = 5.0
+    out.gate_target_min = 0.1
+    out.fault_weight_loss_weight = 0.05
+    out.fault_weight_margin = 0.1
+    out.fusion_variant = "Recovery-Aware Full Gate without Covariance Path"
+    return out
+
+
 def _v3(model: ModelConfig) -> ModelConfig:
     out = _v1(model)
     out.model_name = "post_meas_window_direct_fusion"
@@ -139,6 +202,14 @@ def _v3(model: ModelConfig) -> ModelConfig:
 
 def _pack(name: str, scenario: ScenarioConfig, fault: FaultConfig, model: ModelConfig, train: TrainConfig | None = None) -> ExperimentConfig:
     return ExperimentConfig(name=name, base=BaseConfig(), scenario=deepcopy(scenario), fault=deepcopy(fault), model=deepcopy(model), train=deepcopy(train or TrainConfig()))
+
+
+def _apply_smoke_train_range(train: TrainConfig) -> TrainConfig:
+    out = deepcopy(train)
+    out.train_seed_start, out.train_seed_end = 10, 11
+    out.val_seed_start, out.val_seed_end = 70, 70
+    out.test_seed_start, out.test_seed_end = 80, 80
+    return out
 
 
 def build_experiment_config(preset_name: str) -> ExperimentConfig:
@@ -163,6 +234,9 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         "hetero_clean_v2_rgcf": (_clean_fault(), _rgcf(model), "hetero_4sensor_scene"),
         "hetero_window_pollution_v2_rgcf": (_pollution_fault([1], (30.0, 70.0)), _rgcf(model), "hetero_4sensor_scene"),
         "hetero_robust_matrix_mixed_v2_rgcf": (_matrix_fault(), _rgcf(model), "hetero_4sensor_scene"),
+        "hetero_robust_matrix_mixed_rgcf_v5": (_matrix_fault(), _rgcf_v5(model), "hetero_4sensor_scene"),
+        "hetero_robust_matrix_mixed_rgcf_v5_peer": (_matrix_fault(), _rgcf_v5_peer(model), "hetero_4sensor_scene"),
+        "RGCF-V5-Reliability-Gated Covariance-Calibrated Fusion": (_matrix_fault(), _rgcf_v5(model), "hetero_4sensor_scene"),
         "hetero_random_sensor_window_pollution_v2_rgcf": (_random_window_pollution_fault(), _rgcf(model), "hetero_4sensor_scene"),
         "hetero_bias_ramp_v2_rgcf": (_bias_ramp_fault(), _rgcf(model), "hetero_4sensor_scene"),
         "hetero_dropout_window_v2_rgcf": (_dropout_window_fault(), _rgcf(model), "hetero_4sensor_scene"),
@@ -171,12 +245,34 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         "hetero_v3_window_direct": (_clean_fault(), _v3(model), "hetero_4sensor_scene"),
         "hetero_window_pollution_v3_window_direct": (_pollution_fault([1], (30.0, 70.0)), _v3(model), "hetero_4sensor_scene"),
     }
+
+    phase1_model_presets = {
+        "": _p11_feature_stable_reliability_no_cov(model),
+        "_p0_post_only": _v0(model),
+        "_p1_dual_stream_direct": _v1(model),
+        "_p4_full_gate_no_cov": _p4_full_gate_no_cov(model),
+        "_p11_reliability_no_cov": _p11_feature_stable_reliability_no_cov(model),
+        "_p12_recovery_aware_no_cov": _p12_recovery_aware_full_gate_no_cov(model),
+    }
+    phase1_scenes = (
+        "phase1_s1_balanced_hetero_nominal",
+        "phase1_s2_clustered_hetero_nominal",
+        "phase1_s3_maneuver_hetero_nominal",
+    )
+    for scene_name in phase1_scenes:
+        for suffix, model_cfg in phase1_model_presets.items():
+            phase1_preset = f"{scene_name}{suffix}"
+            table[phase1_preset] = (_clean_fault(), model_cfg, scene_name)
+            table[f"{phase1_preset}_smoke"] = (_clean_fault(), model_cfg, scene_name)
+
     if preset_name not in table:
         raise ValueError(f"Unknown preset_name: {preset_name}")
     fault, model_cfg, scene_name = table[preset_name]
     scenario.scene_name = scene_name
-    if "robust_matrix_mixed" in preset_name:
+    if "robust_matrix_mixed" in preset_name or preset_name == "RGCF-V5-Reliability-Gated Covariance-Calibrated Fusion":
         train.train_seed_start, train.train_seed_end = 10, 69
         train.val_seed_start, train.val_seed_end = 70, 89
         train.test_seed_start, train.test_seed_end = 90, 109
+    if preset_name.endswith("_smoke"):
+        train = _apply_smoke_train_range(train)
     return _pack(preset_name, scenario, fault, model_cfg, train)

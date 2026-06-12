@@ -9,6 +9,9 @@ from .scenarios import (
     WideBaseline4SensorScenario,
     Asymmetric4SensorScenario,
     Hetero4SensorScenario,
+    Phase1BalancedHeteroNominalScenario,
+    Phase1ClusteredHeteroNominalScenario,
+    Phase1ManeuverHeteroNominalScenario,
 )
 
 
@@ -20,6 +23,9 @@ def build_scenario_from_bundle(bundle: ExperimentBundle) -> BaseScenario:
     - default_clean_4sensor_scene
     - wide_baseline_4sensor_scene
     - asymmetric_4sensor_scene
+    - phase1_s1_balanced_hetero_nominal
+    - phase1_s2_clustered_hetero_nominal
+    - phase1_s3_maneuver_hetero_nominal
     """
     scenario_cfg = deepcopy(bundle.scenario)
     scene_name = scenario_cfg.scene_name
@@ -35,5 +41,14 @@ def build_scenario_from_bundle(bundle: ExperimentBundle) -> BaseScenario:
 
     if scene_name == "hetero_4sensor_scene":
         return Hetero4SensorScenario(scenario_cfg)
+
+    if scene_name == "phase1_s1_balanced_hetero_nominal":
+        return Phase1BalancedHeteroNominalScenario(scenario_cfg)
+
+    if scene_name == "phase1_s2_clustered_hetero_nominal":
+        return Phase1ClusteredHeteroNominalScenario(scenario_cfg)
+
+    if scene_name == "phase1_s3_maneuver_hetero_nominal":
+        return Phase1ManeuverHeteroNominalScenario(scenario_cfg)
 
     raise ValueError(f"Unknown scene_name: {scene_name}")

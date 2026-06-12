@@ -17,8 +17,11 @@ project_root/sim_cache/
 project_root/dataset_store/*/
 !project_root/dataset_store/README.md
 project_root/dataset_store/**/*.pkl
+project_root/migration_packages/
+project_root/results/
 project_root/results/**/checkpoints/*.pt
 /results/
 *.zip
+*.whl
 *.docx
 ref*.pdf

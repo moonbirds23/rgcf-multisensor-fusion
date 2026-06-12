@@ -11,6 +11,7 @@ class TrainConfig:
     weight_decay: float = 1e-5
     grad_clip: float = 1.0
     early_stop_patience: int = 12
+    model_seed: int | None = None
     train_seed_start: int = 10
     train_seed_end: int = 69
     val_seed_start: int = 70
