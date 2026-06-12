@@ -1,0 +1,771 @@
+下面给你一份**可直接覆盖原有 readme 的全新文字版**。我把我们这几轮讨论的内容、当前工程主干、以及版本迭代路线一起整合进去了。整体基调是：
+
+* 以当前 **clean original baseline** 为锚点
+* 明确 **V0~V5** 的实验版本路线
+* 把 **meas-stream、Selective gate、temporal-aware gate** 全部纳入统一主线
+* 明确哪些是当前默认理解，哪些是后续待定细节
+* 保持和你现有重构文件、主干目录说明一致，不乱改项目语义
+
+---
+
+# README：NF-DKF 融合分支当前研究状态、版本路线与后续推进方案
+
+---
+
+## 一、当前分支定位
+
+当前分支聚焦于 **NF-DKF 的融合层（Fusion Layer）**，暂时**不扩展到完整滤波框架的全面重构**。当前主任务不是重新发明一整套滤波器，而是在已有 **局部 EKF + 学习式融合** 的框架上，建立一个**稳定、可复现、可逐步增强**的融合研究主线。
+
+当前默认研究顺序是：
+
+1. 先稳定 **clean original baseline**
+2. 再做 **clean train / fault test**
+3. 再做 **轨迹族泛化**
+4. 再做 **meas-stream**
+5. 再做 **gate**
+6. 最后再考虑 **learned reliability**
+
+这条顺序来自当前重构步骤与主干说明，后续若无特别声明，默认按此理解。
+
+---
+
+## 二、当前 baseline 的默认定义
+
+### 2.1 original 的默认理解
+
+当前 `original` 默认理解为：
+
+* 以 **局部 EKF 后验特征** 为主的统一节点融合器
+* 输入核心为：
+
+  * `xhat`
+  * `diag(P)`
+  * `valid`
+* 本质属于 **后验状态级融合器**
+* 不是直接利用原始量测信息的异构融合器
+
+也就是说，current original 的主要能力在于：
+**根据多个节点的后验状态摘要，学习当前时刻的跨节点融合规则。**
+
+### 2.2 clean 的默认理解
+
+当前 `clean` 默认理解为：
+
+* 无显式 `dropout`
+* 无显式 `pollution / jump bias`
+* 但**保留多传感器异构性**
+
+也就是说，clean 并不等于“所有节点完全同质”，而是指：
+**没有人为注入的故障污染，但仍保留不同传感器类型、不同 nominal noise、不同几何条件带来的真实异构性。**
+
+### 2.3 fault test 的默认理解
+
+当前 `fault test` 默认建立在 **clean baseline 训练完成之后**，测试阶段再引入：
+
+* `dropout`
+* `pollution`
+* `both`
+
+它的作用是评估故障外推，而不是在旧 fault-training 代码上继续堆新结构。
+
+---
+
+## 三、当前工程主干与运行逻辑
+
+当前推荐目录结构如下：
+
+```text
+project_root/
+├─ main.py
+├─ configs/
+├─ core/
+├─ simulation/
+├─ features/
+├─ models/
+├─ training/
+├─ experiments/
+├─ scripts/
+└─ results/
+```
+
+其职责划分为：
+
+### 1. `simulation/`
+
+负责仿真主干，包括：
+
+* truth trajectory
+* sensor layout
+* sensor construction
+* measurement model
+* local EKF
+* baseline fusion
+* rollout runner
+
+统一单次 rollout 入口是 `simulation/runner.py`，其基本流程为：
+
+1. 从 scene 构造 truth trajectory
+2. 构造 nominal sensor layout
+3. 构造 nominal sensor objects
+4. 构造 fault manager
+5. 为每个 sensor 初始化一个局部 EKF
+6. 在每个时间步先 predict，再生成 measurement，再做 update
+7. 记录：
+
+   * `xhat`
+   * `Phat`
+   * `valid_mask`
+   * `z_store`
+   * `R_store`
+8. 最后计算 baseline：
+
+   * `AVG`
+   * `CI-chain`
+   * `CI-multi`
+   * `best-single`
+
+这一步是后续 post-stream、meas-stream 和窗口时序建模的统一数据来源。
+
+### 2. `features/`
+
+负责把仿真输出转成模型输入：
+
+* `post_features.py`：当前主干使用的后验状态流
+* `meas_features.py`：量测异构流接口
+* `builders.py`：统一组合 post / meas 特征
+* `dataset.py`：构造成 PyTorch Dataset
+
+当前默认是 **post-stream 主导**，`meas-stream` 先做接口预留，再逐步正式启用。
+
+### 3. `models/`
+
+负责统一融合模型接口：
+
+* `base_fusion.py`
+* `gnn_fusion.py`
+* `model_factory.py`
+
+当前 `OriginalGNNFusion` 是标准 baseline 模块，但后续主创新**不绑定某种特定 backbone**，模型接口保持可替换。
+
+### 4. `training/`
+
+负责训练、评估与 repeat 实验：
+
+* `losses.py`
+* `trainer.py`
+* `evaluator.py`
+* `repeat_runner.py`
+
+当前默认损失为：
+
+[
+loss = loss_{pos} + 0.2 \cdot loss_{vel}
+]
+
+当前训练目标是：
+先让 clean baseline 稳定可复现，再逐步支持后续泛化与结构增强。
+
+### 5. `experiments/`
+
+负责把科研问题组织成正式实验入口：
+
+* `simulate.py`
+* `train.py`
+* `fault_test.py`
+* `generalization_test.py`
+
+后续会扩展：
+
+* `measstream_test.py`
+* `gate_ablation.py`
+* temporal 相关实验入口
+
+这样做的目的，是保证每个科研问题都有独立实验壳层，而不是散落在主脚本里。
+
+### 6. `results/`
+
+统一保存实验结果，目录名带时间、模式、preset、scene、model，且不可覆盖。
+任何新实验都必须落到统一结果目录中，不允许覆盖上次结果。
+
+---
+
+## 四、当前明确不做的事
+
+为了避免研究发散，当前阶段默认**不做**以下内容，除非后续明确重启：
+
+1. 不直接在旧的 fault-training 版本上继续堆新模块
+2. 不一开始就做“异构流 + gate + 时序 + 新损失”全家桶
+3. 不直接把 `hard valid` 完全替换成 learned variable
+4. 不直接把原始量测长历史序列大量堆入模型
+5. 不在没有 clean baseline 的前提下讨论最终创新结论
+6. 不把“更换 backbone / 更换图网络模型”作为当前主要创新点
+
+这些限制的目的，是保证后续每一步都能清楚归因，而不是把系统做成难以解释的大黑箱。
+
+---
+
+## 五、当前研究主线的核心判断
+
+### 5.1 当前 original 的优势
+
+当前 original 基于 `xhat / diag(P) / valid`，有以下优点：
+
+* 语义统一
+* 训练稳定
+* 工程上易复现
+* 能够作为 clean baseline 固化下来
+
+这使它非常适合作为后续所有增强模块的比较锚点。
+
+### 5.2 当前 original 的主要瓶颈
+
+当前 original 主要依赖 EKF 后验特征，因此虽然统一、稳定，但也会弱化不同传感器在**量测空间**中的差异。
+因此它更像：
+
+* “后验状态级融合器”
+
+而不是：
+
+* “直接感知量测异构性和量测可靠性的融合器”
+
+这也是后续必须引入 `meas-stream` 的根本原因。
+
+### 5.3 当前不是优先押注 backbone 创新
+
+当前 GNN 在系统中的主要角色，是一个**节点级汇聚器 / 动态加权器**。
+后续主创新不放在“换更强的图网络模型”上，而更偏向于：
+
+* `meas-stream`
+* `soft gate`
+* `temporal-aware gate`
+* `reliability modelling`
+
+也就是说，后续主线不是 **Graph model innovation**，而是：
+
+**Temporal-aware selective multi-sensor fusion for tracking**。
+这一点在工程接口层也已预留：模型接口必须去耦，便于未来替换 GNN / Transformer / Dual-Stream，但当前不把更换骨干当成创新主线。
+
+---
+
+## 六、后续方法主线：从单流后验融合到时序感知的双流选择性融合
+
+当前系统可以概括为：
+
+[
+\text{Local EKF outputs at } t \rightarrow \text{post-stream feature} \rightarrow \text{node fusion} \rightarrow \hat{x}^{fusion}_t
+]
+
+后续目标是逐步升级为：
+
+[
+\text{Local EKF outputs/history at } t \rightarrow
+\begin{cases}
+\text{post-stream}\
+\text{meas-stream}
+\end{cases}
+\rightarrow
+\text{node-wise temporal encoding}
+\rightarrow
+\text{temporal-aware reliability gate on meas-stream}
+\rightarrow
+\text{cross-node fusion}
+\rightarrow
+\hat{x}^{fusion}_t
+]
+
+也就是：
+
+**局部 EKF 后验 + 当前量测证据 + 短时历史 → 双流编码 → 时序可靠性判断 → 跨节点融合 → 当前全局状态输出。**
+
+这条路线的关键不是单纯“加大模型”，而是：
+
+1. 把量测证据重新引入融合层
+2. 把选择机制显式化
+3. 把时间连续性用于融合判断，而不仅仅留给底层滤波器
+
+这就是当前分支后续最核心的方法主线。
+
+---
+
+## 七、双流设计的默认理解
+
+### 7.1 post-stream
+
+后验状态流，负责维持当前系统的稳定主干。
+默认保留：
+
+* `xhat`
+* `diag(P)`
+* `valid`
+
+其角色是：
+
+* 统一状态语义
+* 保留 clean original 的主干能力
+* 提供最稳定的节点状态摘要
+
+当前每个节点的默认 post 特征通常为 9 维：
+
+* `px / pos_scale`
+* `py / pos_scale`
+* `vx / vel_scale`
+* `vy / vel_scale`
+* `log1p(Pxx)`
+* `log1p(Pyy)`
+* `log1p(Pvx)`
+* `log1p(Pvy)`
+* `valid_flag`
+
+这一定义应尽量保持稳定，不轻易改动。
+
+### 7.2 meas-stream
+
+量测异构流，负责把当前量测证据重新带回融合层。
+它不是替代 EKF，而是在融合层补回量测空间中的异构性与可靠性信息。
+
+后续默认候选特征包括：
+
+* `innovation / residual`
+* `normalized residual / whitened innovation`
+* `NIS`
+* `measurement noise scale`
+* `sensor type embedding`
+* `geometry-related features`
+* `valid`
+
+第一步不追求复杂，而是先验证最小 meas-stream 是否有效。
+
+---
+
+## 八、异构测量参数对齐的默认策略
+
+对 `meas-stream` 的处理，当前默认采用：
+
+**不是在 raw measurement 值层面强行对齐，而是在统计层与语义层对齐。**
+
+### 8.1 统计层对齐
+
+优先使用这些具有统一统计语义的量：
+
+* residual / innovation
+* normalized residual / whitened innovation
+* NIS
+* `diag(R)` 或其 log 形式
+
+这样可以避免不同量纲、不同噪声尺度的原始量测直接拼接导致学习混乱。
+
+### 8.2 语义层对齐
+
+不同传感器的量测维度和物理意义不完全相同，因此采用：
+
+* **共享语义槽位**：一致性、噪声条件、有效性、几何条件
+* **私有槽位**：保留传感器类型特有信息
+
+### 8.3 类型条件化
+
+通过 `sensor type embedding` 告诉网络：
+
+* 当前特征来自哪类传感器
+* 同样的统计模式在不同传感器上含义可能不同
+
+因此，当前推荐的 meas 特征组织形式是：
+
+[
+f^{meas}*{i,t} = [f^{shared}*{i,t}; f^{private}*{i,t}; e*{type_i}]
+]
+
+第一版优先做：
+
+* `shared/private slots + shared encoder + type embedding`
+
+而不是一开始就做很多 per-type 大网络。
+这样既保留异构性，又更适合当前工程阶段。这个思路和 Selective Sensor Fusion 中“不同模态先分别形成高层特征，再进入融合”的原则是一致的。
+
+---
+
+## 九、Selective Sensor Fusion 的默认借鉴方式
+
+当前已确认，Selective Sensor Fusion 论文对本项目最重要的启发有三点：
+
+1. 不同来源特征的可靠性是动态变化的
+2. 可以对某一类特征流引入 `soft gate / hard gate`
+3. `gate` 的生成应由多源上下文共同决定，而不是单流自评
+
+Chen 论文的整体架构由：
+
+* visual encoder
+* inertial encoder
+* feature fusion
+* temporal modelling
+* pose regression
+
+组成；其中 `soft fusion / hard fusion` 是在高层特征上显式建模选择机制，而不是直接在 raw input 层粗暴拼接。
+
+迁移到当前项目时，默认理解为：
+
+* 不直接照搬视觉 / IMU 的具体 encoder 结构
+* 借鉴其“**先编码，再融合，再做选择，再引入时序**”的原则
+* 当前优先采用 **soft gate**
+* `gate` 默认优先作用于 `meas-stream`
+* `hard valid` 不替代，推荐理解为：
+
+[
+g = valid \times reliability
+]
+
+这也是当前重构文件和项目主线中的默认理解。
+
+---
+
+## 十、时序逻辑的默认理解
+
+当前系统底层是时序的，因为：
+
+* 仿真 rollout 按时间推进
+* 每个局部 EKF 都是递推系统
+* 状态本身包含速度等时间相关量
+
+但当前学习式融合头仍基本属于：
+
+* **单时刻输入**
+* **单时刻输出**
+
+也就是说：
+
+> 底层滤波是时序的，但学习式融合头基本还是瞬时的。
+
+因此，后续时间信息的重点不放在“纯输出平滑”，而是放在：
+
+**让当前时刻的融合判断参考最近几步的节点表现和量测一致性。**
+
+当前默认最推荐的时序路线是：
+
+* 先做 **节点内短时序编码**
+* 再做 **temporal-aware gate**
+* 不一开始就上大而全的时空 backbone
+
+这条路线更适合 tracking 任务本身，也更符合当前不把更换 backbone 当主创新点的判断。
+
+---
+
+## 十一、V 版本实验路线图（当前主线）
+
+后续实验默认按 **V0 ~ V5** 版本树推进。
+每一步只引入一个关键变量，避免无法归因。
+
+---
+
+### V0：post-only clean baseline
+
+**定义：**
+
+* 当前 `OriginalGNNFusion`
+* 输入只使用 `post-stream`
+* 不加 `meas-stream`
+* 不加 `gate`
+* 不加时间窗口
+
+**作用：**
+
+* 作为所有后续实验的零号基线
+* 固定训练、评估与结果保存流程
+
+**当前状态：**
+
+* 必须稳定、可复现、不可被后续模块破坏
+
+---
+
+### V1：post + meas（direct fusion）
+
+**定义：**
+
+* 正式引入 `meas-stream`
+* 不加 `gate`
+* 不加时间窗口
+* 最简单地做 direct dual-stream fusion
+
+[
+u_{i,t} = [h^{post}*{i,t}; h^{meas}*{i,t}]
+]
+
+**目标：**
+
+* 验证 meas-stream 本身是否有价值
+* 回答“量测异构流是否值得正式引入”
+
+**注意：**
+
+* 第一版 meas-stream 必须克制
+* 不上 gate，不上复杂时序，不换 backbone
+
+这一步对应 readme/重构里的 `Step 13`，也对应 Selective 论文中的 `direct fusion` 比较基线。
+
+---
+
+### V2：post + meas + soft gate
+
+**定义：**
+
+* 在 V1 基础上对 `meas-stream` 加 `soft gate`
+* gate 默认由 `post + meas` 联合决定
+* `hard valid` 保留，不替代
+
+推荐形式：
+
+[
+g_{i,t} = \sigma(\psi([h^{post}*{i,t}, h^{meas}*{i,t}]))
+]
+
+[
+\tilde{h}^{meas}*{i,t} = valid*{i,t} \cdot g_{i,t} \odot h^{meas}_{i,t}
+]
+
+**目标：**
+
+* 验证“选择性”本身是否有效
+* 回答“meas-stream 是不是需要动态选择，而不是无脑拼接”
+
+**注意：**
+
+* 第一版优先用标量 gate 或低维组块 gate
+* 不上 hard gate
+* 不加时间窗口
+
+这一步对应重构里的 `Step 14` 前半部分，也是 Selective 思路迁移到本项目的第一版。
+
+---
+
+### V3：post-window + meas-window（direct fusion, no gate）
+
+**定义：**
+
+* 开始引入短时间窗口
+* 每个样本由“单时刻样本”升级为“短窗口样本”
+* 先做节点内时序编码
+* 暂时不加 gate
+
+形式上：
+
+[
+h^{post}*{i,t} = Enc*{post}(f^{post}*{i,t-L+1:t})
+]
+[
+h^{meas}*{i,t} = Enc_{meas}(f^{meas}_{i,t-L+1:t})
+]
+
+**目标：**
+
+* 验证时间信息本身是否有价值
+* 判断节点最近几步历史是否能提升表示质量
+
+**注意：**
+
+* 第一版优先用共享 GRU 或 TCN
+* 不一开始上 Temporal Transformer
+* 不改 loss
+
+---
+
+### V4：post-window + meas-window + soft gate
+
+**定义：**
+
+* 在 V3 基础上恢复 `soft gate`
+* gate 仍主要使用当前节点的 post/meas 表示
+* 这一步可以理解为“时间进入特征表示，但 gate 还不是完全时间感知型”
+
+**目标：**
+
+* 看短时历史 + 选择机制是否比单时刻版本更稳
+* 为真正的 temporal-aware gate 做中间对照组
+
+---
+
+### V5：post-window + meas-window + temporal-aware gate
+
+**定义：**
+
+* 当前推荐的最终方法版
+* `gate` 不再只依赖当前时刻特征，而依赖节点短时历史摘要
+* 默认仍优先作用于 `meas-stream`
+
+形式上：
+
+[
+g_{i,t} = \sigma(\psi([h^{post}*{i,t}, h^{meas}*{i,t}, c_t]))
+]
+
+简化版可先去掉 (c_t)：
+
+[
+g_{i,t} = \sigma(\psi([h^{post}*{i,t}, h^{meas}*{i,t}]))
+]
+
+其中 `h` 已经来自时间窗口编码。
+
+**目标：**
+
+* 让当前时刻“该信谁”由最近若干步表现共同决定
+* 建立真正的 **Temporal-aware selective fusion**
+
+这一步是当前最推荐的主方法路线。
+不是“换更强的 GNN”，而是把：
+
+* 双流
+* 选择
+* 时间
+* 可靠性
+
+整合成一个统一方法。
+
+---
+
+## 十二、版本推进的默认顺序
+
+当前默认实验推进顺序是：
+
+1. `V0`：固定 clean baseline
+2. `V1`：只验证 meas-stream
+3. `V2`：只验证 soft gate
+4. `V3`：只验证短时序编码
+5. `V4`：验证短时序 + soft gate
+6. `V5`：形成 temporal-aware gate 最终版
+
+默认原则是：
+
+* 先加证据，再加选择，最后加时间
+* 有强依赖的模块可以一起设计接口，但不要一起上线
+* 每一步都要保留可归因性
+
+因此，当前不建议直接从 V0 跳到 V5。
+也不建议一开始就做 `meas + gate + temporal + new loss` 全家桶。
+
+---
+
+## 十三、当前默认成功标准
+
+后续任何新增模块（例如 `meas-stream`、`gate`、`temporal-aware gate`、`reliability`）都必须满足：
+
+1. 不能破坏 clean baseline 的训练稳定性
+2. 必须通过 ablation 证明有效
+3. 必须与现有主干职责清晰分离
+4. 不能仅靠参数量增加掩盖问题
+5. 最好不仅体现在 clean RMSE 的微小下降，更应体现在：
+
+   * 表示质量提升
+   * 节点行为更可解释
+   * 机动段更稳
+   * 后续泛化实验更有潜力
+
+这是当前阶段判断“有效性”的基本标准。
+
+---
+
+## 十四、当前仍未最终确定的细节
+
+虽然大方向已经确定，但以下细节目前仍是**待实验决定项**：
+
+### 14.1 时间窗口长度 `L`
+
+候选可从：
+
+* 4
+* 6
+* 8
+  开始
+
+不建议一开始上很长窗口。
+
+### 14.2 时序编码器形式
+
+当前默认优先：
+
+* GRU
+* 或 TCN
+
+暂不建议一开始就上 Temporal Transformer。
+
+### 14.3 meas-stream 的最终特征集
+
+当前比较确定优先纳入：
+
+* innovation / residual
+* normalized residual / whitened innovation
+* NIS
+* `diag(R)` / noise scale
+* valid
+* 少量 geometry feature
+* sensor type embedding
+
+`diag(S)`、更复杂 geometry、更多私有槽位是否引入，后续再定。
+
+### 14.4 gate 粒度
+
+第一版优先：
+
+* 标量 gate
+* 或低维组块 gate
+
+不建议第一版直接做高维通道 gate。
+
+### 14.5 gate 是否使用全局上下文
+
+第一版可以先不用全局 context，只基于本节点的 post/meas 时序摘要。
+后续再决定是否加入全局 pooled context。
+
+### 14.6 是否对 post-stream 也加 gate
+
+当前默认**不加**。
+第一版 gate 优先只作用于 `meas-stream`。
+
+### 14.7 是否修改 loss
+
+当前默认**不修改**，先保持：
+[
+loss = loss_{pos} + 0.2 \cdot loss_{vel}
+]
+不建议一开始同时引入新时序正则。
+
+---
+
+## 十五、当前开发与代码实现上的默认口令理解
+
+如果后续新开窗口，默认按以下方式理解：
+
+* “original”
+
+  * 指以 EKF 后验特征为主的统一节点融合器
+  * 当前优先使用 clean 版本作为 baseline
+
+* “clean”
+
+  * 指无 dropout、无 pollution，但保留多传感器异构性
+
+* “fault test”
+
+  * 指 clean training baseline 之后进行的故障泛化测试
+
+* “dual-stream / 双流”
+
+  * 指 `post-stream + meas-stream`
+  * 不是替代 EKF，而是在融合层补回量测异构信息
+
+* “gate”
+
+  * 默认优先理解为针对 `meas-stream` 的 `soft gate`
+  * 灵感来自 Selective Sensor Fusion
+  * 不是直接替代 `hard valid`
+
+* “reliability / confidence”
+
+  * 默认理解为从 hand-crafted confidence 逐步走向 learned reliability
+  * 但当前不作为第一优先级模块
+
+* “temporal”
+
+  * 默认理解为：在融合层显式引入短时历史
+  * 优先用于节点表示与 gate，而不是单纯输出平滑
+
+---
+
