@@ -3,7 +3,7 @@
 **创建时间**: 2026-06-12
 **创建人**: 开发端 Codex
 **预计完成**: 2026-06-13
-**状态**: [ ] 待执行
+**状态**: [~] 执行中
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## 任务 01 — 同步代码与环境预检
 
-- **状态**: [ ] 待执行
+- **状态**: [x] 已完成
 - **优先级**: P0
 - **模型方法**: N/A
 - **场景**: S1_balanced / S2_clustered / S3_maneuver
@@ -37,25 +37,25 @@ D:\envs\nfdkf-gpu\Scripts\python.exe -u scripts\gpu_preflight_check.py --require
 
 ### 验收标准
 
-- [ ] `torch.cuda.is_available()` 为 `True`
-- [ ] `S1 types=['gps2d', 'radar_rb', 'aoa_only', 'uwb_range_only']`
-- [ ] `S2 pos=[(-850.0, -350.0), (-350.0, -250.0), (-700.0, 450.0), (-150.0, 350.0)]`
-- [ ] `S3 truth_last_xy` 不同于 S1/S2
-- [ ] 输出 `[phase1_scenes] ok`
-- [ ] 输出 `[preflight] ok`
+- [x] `torch.cuda.is_available()` 为 `True`
+- [x] `S1 types=['gps2d', 'radar_rb', 'aoa_only', 'uwb_range_only']`
+- [x] `S2 pos=[(-850.0, -350.0), (-350.0, -250.0), (-700.0, 450.0), (-150.0, 350.0)]`
+- [x] `S3 truth_last_xy` 不同于 S1/S2
+- [x] 输出 `[phase1_scenes] ok`
+- [x] 输出 `[preflight] ok`
 
 ### 执行记录（GPU端回填）
 
-- **实际开始**:
-- **实际结束**:
-- **CUDA/torch 信息**:
-- **异常备注**:
+- **实际开始**: 2026-06-12 14:10
+- **实际结束**: 2026-06-12 14:11
+- **CUDA/torch 信息**: PyTorch 2.7.1+cu126, CUDA 12.6, 2x NVIDIA GeForce RTX 3090 Ti (24 GB each)
+- **异常备注**: 无
 
 ---
 
 ## 任务 02 — Phase 1 dry-run
 
-- **状态**: [ ] 待执行
+- **状态**: [x] 已完成
 - **优先级**: P0
 - **模型方法**: P11
 - **场景**: mixed(S1+S2+S3)
@@ -75,24 +75,24 @@ D:\envs\nfdkf-gpu\Scripts\python.exe -u scripts\run_phase1_nominal_benchmark.py 
 
 ### 验收标准
 
-- [ ] `[train_scene_set] S1+S2+S3`
-- [ ] `[test_scenes] S1, S2, S3`
-- [ ] `[methods] P11_feature_stable_reliability_no_cov`
-- [ ] `[train_eval_runs] 5`
-- [ ] `[rule_baseline_rows] 12`
+- [x] `[train_scene_set] S1+S2+S3`
+- [x] `[test_scenes] S1, S2, S3`
+- [x] `[methods] P11_feature_stable_reliability_no_cov`
+- [x] `[train_eval_runs] 5`
+- [x] `[rule_baseline_rows] 12`
 
 ### 执行记录（GPU端回填）
 
-- **实际开始**:
-- **实际结束**:
-- **plan 路径**:
-- **异常备注**:
+- **实际开始**: 2026-06-12 14:11
+- **实际结束**: 2026-06-12 14:12
+- **plan 路径**: `results/phase1_gpu_dryrun/phase1_plan.json`
+- **异常备注**: 无
 
 ---
 
 ## 任务 03 — Phase 1 P11 smoke
 
-- **状态**: [ ] 待执行
+- **状态**: [x] 已完成
 - **优先级**: P0
 - **模型方法**: P11
 - **场景**: mixed(S1+S2+S3)
@@ -116,12 +116,12 @@ D:\envs\nfdkf-gpu\Scripts\python.exe -u scripts\run_phase1_nominal_benchmark.py 
 
 ### 验收标准
 
-- [ ] `results/phase1_gpu_p11_smoke/phase1_run_summary.csv` 存在
-- [ ] `results/phase1_gpu_p11_smoke/phase1_aggregate_by_scene.csv` 存在
-- [ ] S1/S2/S3 均有 P11 learned 行
-- [ ] S1/S2/S3 均有 rule baseline 行
-- [ ] 所有 `rmse/p95/p99/max` 为有限数值，无 NaN/Inf
-- [ ] `dataset_store/<本次mixed数据集>/meta.json` 存在
+- [x] `results/phase1_gpu_p11_smoke/phase1_run_summary.csv` 存在
+- [x] `results/phase1_gpu_p11_smoke/phase1_aggregate_by_scene.csv` 存在
+- [x] S1/S2/S3 均有 P11 learned 行
+- [x] S1/S2/S3 均有 rule baseline 行
+- [x] 所有 `rmse/p95/p99/max` 为有限数值，无 NaN/Inf
+- [x] `dataset_store/<本次mixed数据集>/meta.json` 存在
 
 ### 额外检查命令
 
@@ -133,12 +133,15 @@ Import-Csv results\phase1_gpu_p11_smoke\phase1_aggregate_by_scene.csv |
 
 ### 执行记录（GPU端回填）
 
-- **实际开始**:
-- **实际结束**:
+- **实际开始**: 2026-06-12 15:05
+- **实际结束**: 2026-06-12 15:08
 - **结果路径**: `project_root/results/phase1_gpu_p11_smoke/`
-- **mixed dataset 路径**:
+- **mixed dataset 路径**: `dataset_store/20260612_150503__phase1_s1_s2_s3_mixed_nominal__phase1_s1_s2_s3_mixed_n__21802638`
 - **关键指标摘要**:
-- **异常备注**:
+  | S1 P11 RMSE=3.58 p95=7.07 max=17.26
+  | S2 P11 RMSE=2.95 p95=5.61 max=8.03
+  | S3 P11 RMSE=5.99 p95=10.79 max=18.55
+- **异常备注**: torch.compile 因 Triton 未安装而禁用（Windows 环境），不影响训练结果
 
 ---
 
