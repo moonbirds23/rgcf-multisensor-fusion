@@ -262,7 +262,7 @@ GPU 端完成后只提交：
 
 ```powershell
 git status --short
-git add project_root\TASK_PHASE1_GPU_20260612.md
+git add project_root\task_checklists\TASK_PHASE1_GPU_20260612.md
 git commit -m "docs: update phase1 gpu execution checklist"
 git push
 ```

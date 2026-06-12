@@ -1,14 +1,14 @@
 # GPU 实验任务清单 — 交接格式
 
 > **用途**：本文件定义了开发端 → GPU 执行端的任务交接标准格式。
-> 每个实验批次创建一个 `TASK_<批次名>.md` 文件，按此格式填写后提交 git，
+> 每个实验批次在 `project_root/task_checklists/` 下创建一个 `TASK_<批次名>.md` 文件，按此格式填写后提交 git，
 > GPU 端 pull 后按清单顺序执行并逐项回填结果。
 
 ---
 
 ## 使用方式
 
-1. 开发端在 `project_root/` 下创建 `TASK_<批次名>.md`
+1. 开发端在 `project_root/task_checklists/` 下创建 `TASK_<批次名>.md`
 2. 按下方格式填写任务
 3. `git commit` + `git push`
 4. GPU 端 `git pull`，按清单执行
