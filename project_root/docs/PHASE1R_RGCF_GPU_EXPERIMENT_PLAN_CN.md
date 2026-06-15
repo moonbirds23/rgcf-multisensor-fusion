@@ -191,3 +191,22 @@ CPU smoke 结果：
 | S2R | 1.5293 | 1.5055 | 1.4028 |
 
 该 smoke 只验证闭环，不作为正式论文或汇报指标。
+
+## 9. 第二阶段设计方向
+
+当前 GPU 主实验仍以本文档中的 `Phase1R RGCF` 为准。第二阶段可在 Phase1R 正式结果稳定后推进 `ME-RGCF`，详见：
+
+`project_root/docs/ME_RGCF_HETEROGENEOUS_TEMPORAL_DESIGN_CN.md`
+
+第二阶段方向：
+
+- 将 measurement 从当前的 context/pooling 形式升级为异构图中的 M 节点。
+- 构建 `3P + 5M` typed graph，其中 P 节点为 track 后验，M 节点为 track/evidence 量测。
+- 使用 `M-M` 量测一致性、`M→P` cross attention、`P-P` 后验协商三阶段消息传递。
+- 在 ME-A1 以后引入时间记忆：M 短窗捕捉量测突变，P 长窗捕捉后验漂移。
+
+第二阶段不改变当前验收标准：
+
+- 当前默认 benchmark 不运行 ME-RGCF。
+- 当前默认结果表仍只比较 `single-T1/T2/T3`、`AVG-3T`、`WAA-MM-3T`、`CI-3T` 和 `RGCF`。
+- ME-RGCF 只作为 Phase2 消融与创新模型，在 Phase1R baseline 稳定后单独实现和评估。
