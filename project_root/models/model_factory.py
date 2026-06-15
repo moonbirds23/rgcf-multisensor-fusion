@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.types import ExperimentBundle
-from .gnn_fusion import OriginalGNNFusion, PostMeasDirectFusion, PostMeasSoftGateFusion, PostMeasWindowDirectFusion
+from .gnn_fusion import OriginalGNNFusion, Phase1RRGCF, PostMeasDirectFusion, PostMeasSoftGateFusion, PostMeasWindowDirectFusion, SkepticalNeuralFusionA
 
 
 def build_model_from_bundle(bundle: ExperimentBundle):
@@ -35,6 +35,42 @@ def build_model_from_bundle(bundle: ExperimentBundle):
             cov_calib_max_scale=float(bundle.model.cov_calib_max_scale),
             use_cov_in_fusion=bool(getattr(bundle.model, "use_cov_in_fusion", False)),
             cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.0)),
+            **common,
+        )
+    if name == "skeptical_neural_fusion_a":
+        return SkepticalNeuralFusionA(
+            post_in_dim=int(bundle.model.post_in_dim),
+            meas_in_dim=int(bundle.model.meas_in_dim),
+            meas_hidden_dim=int(bundle.model.meas_hidden_dim),
+            gate_hidden_dim=int(bundle.model.gate_hidden_dim),
+            gate_init_bias=float(bundle.model.gate_init_bias),
+            gate_weight_alpha=float(bundle.model.gate_weight_alpha),
+            gate_eps=float(bundle.model.gate_eps),
+            base_logit_temperature=float(getattr(bundle.model, "base_logit_temperature", 2.0)),
+            weight_uniform_mix=float(getattr(bundle.model, "weight_uniform_mix", 0.02)),
+            cov_calib_min_scale=float(bundle.model.cov_calib_min_scale),
+            cov_calib_max_scale=float(bundle.model.cov_calib_max_scale),
+            cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.5)),
+            cap_min=float(getattr(bundle.model, "snf_cap_min", 0.05)),
+            cap_max=float(getattr(bundle.model, "snf_cap_max", 0.85)),
+            quarantine_penalty=float(getattr(bundle.model, "snf_quarantine_penalty", 2.0)),
+            **common,
+        )
+    if name == "phase1r_rgcf":
+        return Phase1RRGCF(
+            post_in_dim=int(bundle.model.post_in_dim),
+            meas_in_dim=int(bundle.model.meas_in_dim),
+            evidence_in_dim=int(getattr(bundle.model, "evidence_in_dim", 16)),
+            meas_hidden_dim=int(bundle.model.meas_hidden_dim),
+            gate_hidden_dim=int(bundle.model.gate_hidden_dim),
+            gate_init_bias=float(bundle.model.gate_init_bias),
+            gate_weight_alpha=float(bundle.model.gate_weight_alpha),
+            gate_eps=float(bundle.model.gate_eps),
+            base_logit_temperature=float(getattr(bundle.model, "base_logit_temperature", 1.5)),
+            weight_uniform_mix=float(getattr(bundle.model, "weight_uniform_mix", 0.02)),
+            cov_calib_min_scale=float(bundle.model.cov_calib_min_scale),
+            cov_calib_max_scale=float(bundle.model.cov_calib_max_scale),
+            cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.35)),
             **common,
         )
     if name == "post_meas_window_direct_fusion":

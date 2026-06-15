@@ -49,6 +49,16 @@ class FusionTimeStepDataset(Dataset):
                 np.asarray(feature_bundle.meas.node_feat, dtype=np.float32)
             )
 
+        self._evidence_feat = None
+        self._evidence_mask = None
+        if feature_bundle.evidence is not None:
+            self._evidence_feat = torch.from_numpy(
+                np.asarray(feature_bundle.evidence.node_feat, dtype=np.float32)
+            )
+            self._evidence_mask = torch.from_numpy(
+                np.asarray(feature_bundle.evidence.mask, dtype=np.float32)
+            )
+
     def __len__(self):
         return self._post_feat.shape[0]
 
@@ -60,6 +70,9 @@ class FusionTimeStepDataset(Dataset):
         }
         if self._meas_feat is not None:
             out["meas_feat"] = self._meas_feat[idx]
+        if self._evidence_feat is not None:
+            out["evidence_feat"] = self._evidence_feat[idx]
+            out["evidence_mask"] = self._evidence_mask[idx]
         if self._gate_target is not None:
             out["gate_target"] = self._gate_target[idx]
             out["gate_supervision_mask"] = self._gate_supervision_mask[idx]
@@ -102,6 +115,13 @@ def _gate_arrays(sim: Dict[str, np.ndarray], feat: FeatureBundle, bundle: Experi
     if not bool(getattr(bundle.model, "use_gate_supervision", False)):
         return None, None
     valid = np.asarray(feat.post.mask, dtype=np.float32)
+    if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf":
+        xhat = np.asarray(sim.get("track_xhat", sim.get("xhat")), dtype=np.float32)
+        truth = np.asarray(sim.get("x_truth_4d"), dtype=np.float32)
+        pos_err = np.linalg.norm(xhat[..., :2] - truth[:, None, :2], axis=-1)
+        tau = max(float(getattr(bundle.model, "track_reliability_tau", 20.0)), 1e-6)
+        target = np.exp(-pos_err / tau).astype(np.float32)
+        return target * valid, valid
     fault = np.asarray(sim.get("fault_active_mask", np.zeros_like(valid)), dtype=np.float32)
     normal = float(getattr(bundle.model, "normal_gate_target", 0.8))
     bad = float(getattr(bundle.model, "fault_gate_target", 0.2))

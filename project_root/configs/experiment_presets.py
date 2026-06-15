@@ -191,6 +191,92 @@ def _p12_recovery_aware_full_gate_no_cov(model: ModelConfig) -> ModelConfig:
     return out
 
 
+def _snf_a(model: ModelConfig) -> ModelConfig:
+    out = deepcopy(model)
+    out.model_name = "skeptical_neural_fusion_a"
+    out.use_post_stream = True
+    out.use_meas_stream = True
+    out.use_gate = True
+    out.use_meas_in_representation = False
+    out.output_fusion_mode = "aa_mm"
+    out.base_logit_temperature = 2.0
+    out.weight_uniform_mix = 0.02
+    out.gate_init_bias = 0.0
+    out.gate_weight_alpha = 1.2
+    out.use_cov_calibration = True
+    out.use_cov_in_fusion = True
+    out.cov_weight_beta = 0.5
+    out.cov_calib_min_scale = 1.0
+    out.cov_calib_max_scale = 30.0
+    out.cov_prior_weight = 0.002
+    out.cov_sep_weight = 0.01
+    out.cov_fault_normal_margin = 1.0
+    out.snf_cap_min = 0.05
+    out.snf_cap_max = 0.85
+    out.snf_quarantine_penalty = 2.0
+    out.snf_use_valid_drift_aug = True
+    out.snf_aug_prob = 0.08
+    out.snf_aug_pos_drift = 0.08
+    out.snf_aug_vel_drift = 0.12
+    out.snf_aug_false_cov_log = 0.25
+    out.snf_risk_loss_weight = 0.05
+    out.snf_overconf_loss_weight = 0.02
+    out.snf_underconf_loss_weight = 0.005
+    out.snf_risk_error_scale = 20.0
+    out.snf_quarantine_loss_weight = 0.03
+    out.snf_cap_loss_weight = 0.02
+    out.snf_fused_nll_weight = 0.001
+    out.use_gate_supervision = True
+    out.use_balanced_gate_loss = True
+    out.gate_supervision_weight = 0.08
+    out.gate_prior_weight = 0.002
+    out.gate_prior_mean = 0.70
+    out.normal_gate_target = 0.85
+    out.fault_gate_target = 0.10
+    out.use_error_aware_gate_target = True
+    out.gate_error_tau = 8.0
+    out.gate_target_min = 0.05
+    out.fault_weight_loss_weight = 0.15
+    out.fault_weight_margin = 0.12
+    out.fusion_variant = "SNF-A Skeptical Cross-Examined AA-MM Fusion"
+    return out
+
+
+def _phase1r_rgcf(model: ModelConfig) -> ModelConfig:
+    out = deepcopy(model)
+    out.model_name = "phase1r_rgcf"
+    out.use_post_stream = True
+    out.use_meas_stream = True
+    out.use_gate = True
+    out.use_meas_in_representation = True
+    out.output_fusion_mode = "info_diag"
+    out.post_in_dim = 9
+    out.meas_in_dim = 18
+    out.evidence_in_dim = 16
+    out.base_logit_temperature = 1.5
+    out.weight_uniform_mix = 0.02
+    out.gate_init_bias = 0.5
+    out.gate_weight_alpha = 1.0
+    out.use_cov_calibration = True
+    out.use_cov_in_fusion = True
+    out.cov_weight_beta = 0.35
+    out.cov_calib_min_scale = 1.0
+    out.cov_calib_max_scale = 25.0
+    out.cov_prior_weight = 0.001
+    out.use_gate_supervision = True
+    out.use_balanced_gate_loss = False
+    out.gate_supervision_weight = 0.03
+    out.gate_prior_weight = 0.001
+    out.gate_prior_mean = 0.70
+    out.normal_gate_target = 0.9
+    out.fault_gate_target = 0.1
+    out.track_reliability_tau = 20.0
+    out.rgcf_tail_loss_weight = 0.02
+    out.rgcf_tail_error_scale = 25.0
+    out.fusion_variant = "RGCF Phase1R corrected 3-track evidence-aware fusion"
+    return out
+
+
 def _v3(model: ModelConfig) -> ModelConfig:
     out = _v1(model)
     out.model_name = "post_meas_window_direct_fusion"
@@ -242,6 +328,7 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         "hetero_dropout_window_v2_rgcf": (_dropout_window_fault(), _rgcf(model), "hetero_4sensor_scene"),
         "hetero_robust_matrix_mixed_post_only_gnn": (_matrix_fault(), _v0(model), "hetero_4sensor_scene"),
         "hetero_robust_matrix_mixed_dual_stream_plain_gnn": (_matrix_fault(), _v1(model), "hetero_4sensor_scene"),
+        "hetero_robust_matrix_mixed_snf_a": (_matrix_fault(), _snf_a(model), "hetero_4sensor_scene"),
         "hetero_v3_window_direct": (_clean_fault(), _v3(model), "hetero_4sensor_scene"),
         "hetero_window_pollution_v3_window_direct": (_pollution_fault([1], (30.0, 70.0)), _v3(model), "hetero_4sensor_scene"),
     }
@@ -253,6 +340,7 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         "_p4_full_gate_no_cov": _p4_full_gate_no_cov(model),
         "_p11_reliability_no_cov": _p11_feature_stable_reliability_no_cov(model),
         "_p12_recovery_aware_no_cov": _p12_recovery_aware_full_gate_no_cov(model),
+        "_snf_a": _snf_a(model),
     }
     phase1_scenes = (
         "phase1_s1_balanced_hetero_nominal",
@@ -264,6 +352,15 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
             phase1_preset = f"{scene_name}{suffix}"
             table[phase1_preset] = (_clean_fault(), model_cfg, scene_name)
             table[f"{phase1_preset}_smoke"] = (_clean_fault(), model_cfg, scene_name)
+
+    phase1r_scenes = (
+        "phase1r_basic_3track_2evidence_nominal",
+        "phase1r_maneuver_3track_2evidence_nominal",
+    )
+    for scene_name in phase1r_scenes:
+        table[scene_name] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
+        table[f"{scene_name}_rgcf"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
+        table[f"{scene_name}_rgcf_smoke"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
 
     if preset_name not in table:
         raise ValueError(f"Unknown preset_name: {preset_name}")

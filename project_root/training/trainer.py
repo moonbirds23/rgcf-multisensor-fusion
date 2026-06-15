@@ -168,6 +168,13 @@ class TrainHistoryItem:
     train_mean_cov_scale: float = 0.0
     train_loss_fault_weight: float = 0.0
     train_mean_fault_weight: float = 0.0
+    train_loss_risk: float = 0.0
+    train_loss_overconf: float = 0.0
+    train_loss_underconf: float = 0.0
+    train_loss_quarantine: float = 0.0
+    train_loss_cap: float = 0.0
+    train_loss_fused_nll: float = 0.0
+    train_valid_drift_aug_count: float = 0.0
 
 
 @dataclass
@@ -264,6 +271,74 @@ def _collate_to_device(batch: List[Dict], device: torch.device) -> Dict:
     return out
 
 
+def _apply_valid_but_drift_augmentation(
+    post_feat: torch.Tensor,
+    mask: torch.Tensor,
+    target: torch.Tensor,
+    gate_target: torch.Tensor | None,
+    gate_mask: torch.Tensor | None,
+    bundle: ExperimentBundle,
+) -> Tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, int]:
+    if not bool(getattr(bundle.model, "snf_use_valid_drift_aug", False)):
+        return post_feat, gate_target, gate_mask, 0
+
+    prob = float(getattr(bundle.model, "snf_aug_prob", 0.0))
+    if prob <= 0.0 or post_feat.dim() != 3:
+        return post_feat, gate_target, gate_mask, 0
+
+    valid_idx = int(getattr(bundle.model, "post_valid_idx", 8))
+    valid = (mask > 0.5) & (post_feat[..., valid_idx] > 0.5)
+    aug_mask = (torch.rand(valid.shape, device=post_feat.device) < prob) & valid
+    aug_count = int(aug_mask.sum().detach().item())
+    if aug_count == 0:
+        return post_feat, gate_target, gate_mask, 0
+
+    post_feat = post_feat.clone()
+    pos_scale = max(float(bundle.scenario.pos_scale), 1e-6)
+    vel_scale = max(float(bundle.scenario.vel_scale), 1e-6)
+    pos_drift = float(getattr(bundle.model, "snf_aug_pos_drift", 0.08))
+    vel_drift = float(getattr(bundle.model, "snf_aug_vel_drift", 0.12))
+    false_cov_log = float(getattr(bundle.model, "snf_aug_false_cov_log", 0.25))
+
+    true_pos = target[:, None, 0:2] / pos_scale
+    true_vel = target[:, None, 2:4] / vel_scale
+
+    pos_dir = post_feat[..., 0:2].detach() - true_pos
+    pos_dir = pos_dir + 0.05 * torch.randn_like(pos_dir)
+    pos_dir = pos_dir / pos_dir.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    pos_mag = pos_drift * (0.5 + torch.rand((*valid.shape, 1), device=post_feat.device))
+
+    vel_dir = post_feat[..., 2:4].detach() - true_vel
+    vel_dir = vel_dir + 0.05 * torch.randn_like(vel_dir)
+    vel_dir = vel_dir / vel_dir.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    vel_mag = vel_drift * (0.5 + torch.rand((*valid.shape, 1), device=post_feat.device))
+
+    aug_f = aug_mask.unsqueeze(-1).to(post_feat.dtype)
+    post_feat[..., 0:2] = post_feat[..., 0:2] + aug_f * pos_dir * pos_mag
+    post_feat[..., 2:4] = post_feat[..., 2:4] + aug_f * vel_dir * vel_mag
+
+    confident_cov = torch.full_like(post_feat[..., 4:8], false_cov_log)
+    post_feat[..., 4:8] = torch.where(
+        aug_f.bool(),
+        torch.minimum(post_feat[..., 4:8], confident_cov),
+        post_feat[..., 4:8],
+    )
+
+    if gate_target is not None:
+        gate_target = gate_target.clone()
+        bad_target = float(getattr(bundle.model, "fault_gate_target", 0.1))
+        gate_target = torch.where(
+            aug_mask,
+            torch.full_like(gate_target, bad_target),
+            gate_target,
+        )
+    if gate_mask is not None:
+        gate_mask = gate_mask.clone()
+        gate_mask = torch.where(aug_mask, torch.ones_like(gate_mask), gate_mask)
+
+    return post_feat, gate_target, gate_mask, aug_count
+
+
 def train_fusion_model(
     bundle: ExperimentBundle,
     *,
@@ -345,6 +420,13 @@ def train_fusion_model(
     window_size = int(getattr(bundle.model, "window_size", 6))
     use_gate_supervision = bool(getattr(bundle.model, "use_gate_supervision", False))
     use_fault_weight_loss = float(getattr(bundle.model, "fault_weight_loss_weight", 0.0)) > 0.0
+    use_snf_aux_loss = (
+        float(getattr(bundle.model, "snf_risk_loss_weight", 0.0)) > 0.0
+        or float(getattr(bundle.model, "snf_overconf_loss_weight", 0.0)) > 0.0
+        or float(getattr(bundle.model, "snf_quarantine_loss_weight", 0.0)) > 0.0
+        or float(getattr(bundle.model, "snf_cap_loss_weight", 0.0)) > 0.0
+        or float(getattr(bundle.model, "snf_fused_nll_weight", 0.0)) > 0.0
+    )
 
     def _build_ds(sims):
         if use_temporal:
@@ -373,6 +455,8 @@ def train_fusion_model(
         pin_memory=True,
         persistent_workers=num_workers > 0,
     )
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 2
 
     train_loader = DataLoader(
         train_ds,
@@ -380,7 +464,6 @@ def train_fusion_model(
         shuffle=True,
         drop_last=False,
         num_workers=num_workers,
-        prefetch_factor=2 if num_workers > 0 else None,
         generator=loader_generator,
         **loader_kwargs,
     )
@@ -407,11 +490,23 @@ def train_fusion_model(
                 model = torch.compile(model, mode=_mode)
                 # Eagerly trigger compilation on a dummy batch to catch
                 # lazy compilation errors (e.g. TritonMissing) early.
-                _dummy_post = torch.randn(1, 4, 9, device=device)
-                _dummy_mask = torch.ones(1, 4, device=device)
-                _dummy_meas = torch.randn(1, 4, 18, device=device)
-                _ = model(post_feat=_dummy_post, mask=_dummy_mask,
-                          meas_feat=_dummy_meas, return_weights=False)
+                dummy_nodes = 3 if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf" else 4
+                _dummy_post = torch.randn(1, dummy_nodes, int(bundle.model.post_in_dim), device=device)
+                _dummy_mask = torch.ones(1, dummy_nodes, device=device)
+                _dummy_meas = torch.randn(1, dummy_nodes, int(bundle.model.meas_in_dim), device=device)
+                _dummy_evidence = None
+                _dummy_evidence_mask = None
+                if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf":
+                    _dummy_evidence = torch.randn(1, 2, int(getattr(bundle.model, "evidence_in_dim", 16)), device=device)
+                    _dummy_evidence_mask = torch.ones(1, 2, device=device)
+                _ = model(
+                    post_feat=_dummy_post,
+                    mask=_dummy_mask,
+                    meas_feat=_dummy_meas,
+                    evidence_feat=_dummy_evidence,
+                    evidence_mask=_dummy_evidence_mask,
+                    return_weights=False,
+                )
                 _compiled = True
                 print(f"[compile] torch.compile enabled (mode={_mode})")
                 # Enable TF32 for faster matmul on Ampere (safe for float32)
@@ -450,16 +545,35 @@ def train_fusion_model(
         train_mean_cov_scale_sum = 0.0
         train_fault_weight_sum = 0.0
         train_mean_fault_weight_sum = 0.0
+        train_risk_sum = 0.0
+        train_overconf_sum = 0.0
+        train_underconf_sum = 0.0
+        train_quarantine_sum = 0.0
+        train_cap_sum = 0.0
+        train_fused_nll_sum = 0.0
+        train_aug_count = 0
         n = 0
 
         for batch_idx, batch in enumerate(train_loader):
             post_feat = batch["post_feat"].to(device, non_blocking=True)
             mask = batch["mask"].to(device, non_blocking=True)
             target = batch["target"].to(device, non_blocking=True)
+            gate_target = batch.get("gate_target", None)
+            gate_mask = batch.get("gate_supervision_mask", None)
+            if gate_target is not None:
+                gate_target = gate_target.to(device, non_blocking=True)
+            if gate_mask is not None:
+                gate_mask = gate_mask.to(device, non_blocking=True)
 
             meas_feat = None
             if "meas_feat" in batch:
                 meas_feat = batch["meas_feat"].to(device, non_blocking=True)
+
+            evidence_feat = None
+            evidence_mask = None
+            if "evidence_feat" in batch:
+                evidence_feat = batch["evidence_feat"].to(device, non_blocking=True)
+                evidence_mask = batch["evidence_mask"].to(device, non_blocking=True)
 
             post_win = None
             meas_win = None
@@ -467,24 +581,29 @@ def train_fusion_model(
                 post_win = batch["post_win"].to(device, non_blocking=True)
                 meas_win = batch["meas_win"].to(device, non_blocking=True)
 
+            post_feat, gate_target, gate_mask, aug_count = _apply_valid_but_drift_augmentation(
+                post_feat,
+                mask,
+                target,
+                gate_target,
+                gate_mask,
+                bundle,
+            )
+            train_aug_count += aug_count
+
             out = model(
                 post_feat=post_feat,
                 mask=mask,
                 meas_feat=meas_feat,
-                return_weights=use_gate_supervision or use_fault_weight_loss,
+                evidence_feat=evidence_feat,
+                evidence_mask=evidence_mask,
+                return_weights=use_gate_supervision or use_fault_weight_loss or use_snf_aux_loss,
                 post_win=post_win,
                 meas_win=meas_win,
             )
             pred = out.pred
 
             if use_gate_supervision:
-                gate_target = batch.get("gate_target", None)
-                gate_mask = batch.get("gate_supervision_mask", None)
-                if gate_target is not None:
-                    gate_target = gate_target.to(device, non_blocking=True)
-                if gate_mask is not None:
-                    gate_mask = gate_mask.to(device, non_blocking=True)
-
                 loss, info = compute_fusion_loss_with_gate(
                     pred,
                     target,
@@ -493,6 +612,10 @@ def train_fusion_model(
                     gate_mask=gate_mask,
                     weights=out.weights,
                     cov_scale=out.aux.get("cov_scale", None),
+                    risk=out.aux.get("risk", None),
+                    quarantine=out.aux.get("quarantine", None),
+                    weight_cap=out.aux.get("weight_cap", None),
+                    fused_cov_diag=out.aux.get("fused_cov_diag", None),
                     vel_weight=vel_weight,
                     gate_weight=float(getattr(bundle.model, "gate_supervision_weight", 0.05)),
                     gate_prior_weight=float(getattr(bundle.model, "gate_prior_weight", 0.005)),
@@ -502,6 +625,15 @@ def train_fusion_model(
                     cov_fault_normal_margin=float(getattr(bundle.model, "cov_fault_normal_margin", 1.0)),
                     fault_weight_loss_weight=float(getattr(bundle.model, "fault_weight_loss_weight", 0.0)),
                     fault_weight_margin=float(getattr(bundle.model, "fault_weight_margin", 0.1)),
+                    risk_loss_weight=float(getattr(bundle.model, "snf_risk_loss_weight", 0.0)),
+                    overconf_loss_weight=float(getattr(bundle.model, "snf_overconf_loss_weight", 0.0)),
+                    underconf_loss_weight=float(getattr(bundle.model, "snf_underconf_loss_weight", 0.0)),
+                    risk_error_scale=float(getattr(bundle.model, "snf_risk_error_scale", 20.0)),
+                    quarantine_loss_weight=float(getattr(bundle.model, "snf_quarantine_loss_weight", 0.0)),
+                    cap_loss_weight=float(getattr(bundle.model, "snf_cap_loss_weight", 0.0)),
+                    fused_nll_weight=float(getattr(bundle.model, "snf_fused_nll_weight", 0.0)),
+                    tail_loss_weight=float(getattr(bundle.model, "rgcf_tail_loss_weight", 0.0)),
+                    tail_error_scale=float(getattr(bundle.model, "rgcf_tail_error_scale", 25.0)),
                     balanced_gate_loss=bool(getattr(bundle.model, "use_balanced_gate_loss", True)),
                     fault_gate_threshold=0.5 * (
                         float(getattr(bundle.model, "normal_gate_target", 0.8))
@@ -528,6 +660,12 @@ def train_fusion_model(
             train_mean_cov_scale_sum += info.get("mean_cov_scale", 0.0) * bs
             train_fault_weight_sum += info.get("loss_fault_weight", 0.0) * bs
             train_mean_fault_weight_sum += info.get("mean_fault_weight", 0.0) * bs
+            train_risk_sum += info.get("loss_risk", 0.0) * bs
+            train_overconf_sum += info.get("loss_overconf", 0.0) * bs
+            train_underconf_sum += info.get("loss_underconf", 0.0) * bs
+            train_quarantine_sum += info.get("loss_quarantine", 0.0) * bs
+            train_cap_sum += info.get("loss_cap", 0.0) * bs
+            train_fused_nll_sum += info.get("loss_fused_nll", 0.0) * bs
             n += bs
 
             # Progress logging every ~10% of epoch
@@ -547,6 +685,13 @@ def train_fusion_model(
             "mean_cov_scale": train_mean_cov_scale_sum / max(n, 1),
             "loss_fault_weight": train_fault_weight_sum / max(n, 1),
             "mean_fault_weight": train_mean_fault_weight_sum / max(n, 1),
+            "loss_risk": train_risk_sum / max(n, 1),
+            "loss_overconf": train_overconf_sum / max(n, 1),
+            "loss_underconf": train_underconf_sum / max(n, 1),
+            "loss_quarantine": train_quarantine_sum / max(n, 1),
+            "loss_cap": train_cap_sum / max(n, 1),
+            "loss_fused_nll": train_fused_nll_sum / max(n, 1),
+            "valid_drift_aug_count": float(train_aug_count),
         }
 
         val_metrics = evaluate_loader(
@@ -576,6 +721,13 @@ def train_fusion_model(
             train_mean_cov_scale=float(train_metrics["mean_cov_scale"]),
             train_loss_fault_weight=float(train_metrics["loss_fault_weight"]),
             train_mean_fault_weight=float(train_metrics["mean_fault_weight"]),
+            train_loss_risk=float(train_metrics["loss_risk"]),
+            train_loss_overconf=float(train_metrics["loss_overconf"]),
+            train_loss_underconf=float(train_metrics["loss_underconf"]),
+            train_loss_quarantine=float(train_metrics["loss_quarantine"]),
+            train_loss_cap=float(train_metrics["loss_cap"]),
+            train_loss_fused_nll=float(train_metrics["loss_fused_nll"]),
+            train_valid_drift_aug_count=float(train_metrics["valid_drift_aug_count"]),
         )
         history.append(asdict(history_item))
 
@@ -589,6 +741,14 @@ def train_fusion_model(
                 f"cov_sep={train_metrics['loss_cov_sep']:.6f}, "
                 f"mean_cov={train_metrics['mean_cov_scale']:.4f}, "
                 f"fault_w={train_metrics['loss_fault_weight']:.6f}"
+            )
+        if use_snf_aux_loss:
+            gate_log += (
+                f", risk={train_metrics['loss_risk']:.6f}, "
+                f"overconf={train_metrics['loss_overconf']:.6f}, "
+                f"q={train_metrics['loss_quarantine']:.6f}, "
+                f"cap={train_metrics['loss_cap']:.6f}, "
+                f"aug={int(train_metrics['valid_drift_aug_count'])}"
             )
         print(
             f"[Epoch {ep:03d}] "

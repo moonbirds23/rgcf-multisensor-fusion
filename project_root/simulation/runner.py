@@ -139,6 +139,100 @@ def _safe_nis(innov: np.ndarray, S: np.ndarray) -> float:
     return max(nis, 0.0)
 
 
+def _safe_measurement_residual_norm(sensor, z, R, x_ref: np.ndarray) -> float:
+    if z is None or R is None:
+        return float("nan")
+    x_ref = np.asarray(x_ref, dtype=np.float64)
+    if sensor.sensor_type == "gps2d":
+        z_pred = np.asarray(h_gps2d(x_ref), dtype=np.float64)
+    elif sensor.sensor_type == "radar_rb":
+        z_pred = np.asarray(h_radar_rb(x_ref, sensor.sx, sensor.sy), dtype=np.float64)
+    elif sensor.sensor_type == "aoa_only":
+        z_pred = np.asarray(h_aoa_only(x_ref, sensor.sx, sensor.sy), dtype=np.float64)
+    elif sensor.sensor_type == "uwb_range_only":
+        z_pred = np.asarray(h_uwb_range_only(x_ref, sensor.sx, sensor.sy), dtype=np.float64)
+    else:
+        return float("nan")
+    innov = np.asarray(z, dtype=np.float64).reshape(-1) - z_pred
+    innov = _normalize_innovation_for_sensor(sensor.sensor_type, innov)
+    R_arr = np.asarray(R, dtype=np.float64)
+    try:
+        rinv = np.linalg.pinv(R_arr + 1e-9 * np.eye(R_arr.shape[0], dtype=np.float64))
+        return float(np.sqrt(max(float(innov.T @ rinv @ innov), 0.0)))
+    except Exception:
+        return float(np.linalg.norm(innov))
+
+
+def _attach_phase1r_role_views(sim: Dict[str, np.ndarray], sensors, sensor_roles: List[str]) -> None:
+    roles = np.array([str(r or "track") for r in sensor_roles], dtype=object)
+    track_idx = np.flatnonzero(roles == "track")
+    evidence_idx = np.flatnonzero(roles == "evidence")
+    sim["sensor_roles"] = roles
+    sim["track_indices"] = track_idx.astype(np.int64)
+    sim["evidence_indices"] = evidence_idx.astype(np.int64)
+
+    if track_idx.size > 0:
+        for src, dst in (
+            ("xhat", "track_xhat"),
+            ("Phat", "track_Phat"),
+            ("xpred", "track_xpred"),
+            ("Ppred", "track_Ppred"),
+            ("valid_mask", "track_valid_mask"),
+            ("z_store", "track_z"),
+            ("R_store", "track_R"),
+            ("innovation_store", "track_innovation"),
+            ("nis_store", "track_nis"),
+        ):
+            if src in sim:
+                sim[dst] = sim[src][:, track_idx].copy()
+        sim["track_sensor_type_codes"] = sim["sensor_type_codes"][track_idx].copy()
+        sim["track_sensor_type_names"] = sim["sensor_type_names"][track_idx].copy()
+        sim["track_sensor_pos"] = sim["sensor_pos"][track_idx].copy()
+
+    if evidence_idx.size > 0:
+        for src, dst in (
+            ("z_store", "evidence_z"),
+            ("R_store", "evidence_R"),
+            ("valid_mask", "evidence_valid_mask"),
+            ("zpred_store", "evidence_zpred"),
+            ("innovation_store", "evidence_innovation"),
+            ("nis_store", "evidence_nis"),
+        ):
+            if src in sim:
+                sim[dst] = sim[src][:, evidence_idx].copy()
+        sim["evidence_sensor_type_codes"] = sim["sensor_type_codes"][evidence_idx].copy()
+        sim["evidence_sensor_type_names"] = sim["sensor_type_names"][evidence_idx].copy()
+        sim["evidence_sensor_pos"] = sim["sensor_pos"][evidence_idx].copy()
+
+    if track_idx.size > 0 and evidence_idx.size > 0:
+        track_xhat = np.asarray(sim["track_xhat"], dtype=np.float64)
+        track_valid = np.asarray(sim["track_valid_mask"], dtype=np.float64)
+        k_count, evidence_count = sim["evidence_z"].shape
+        track_count = track_idx.size
+        residual_prior = np.full((k_count, evidence_count), np.nan, dtype=np.float64)
+        residual_track = np.full((k_count, evidence_count, track_count), np.nan, dtype=np.float64)
+        for k in range(k_count):
+            valid_tracks = np.flatnonzero(track_valid[k] > 0.5)
+            if valid_tracks.size == 0:
+                prior = np.mean(track_xhat[k], axis=0)
+            else:
+                prior = np.mean(track_xhat[k, valid_tracks], axis=0)
+            for local_e, global_e in enumerate(evidence_idx):
+                sensor = sensors[int(global_e)]
+                z = sim["z_store"][k, global_e]
+                R = sim["R_store"][k, global_e]
+                residual_prior[k, local_e] = _safe_measurement_residual_norm(sensor, z, R, prior)
+                for local_t in range(track_count):
+                    residual_track[k, local_e, local_t] = _safe_measurement_residual_norm(
+                        sensor,
+                        z,
+                        R,
+                        track_xhat[k, local_t],
+                    )
+        sim["evidence_residual_to_prior"] = residual_prior
+        sim["evidence_residual_to_track"] = residual_track
+
+
 def _ekf_update_dispatch(
     ekf: CVEKF,
     ekf_state: EKFState,
@@ -216,6 +310,10 @@ def run_single_simulation(bundle: ExperimentBundle) -> RunnerOutputs:
     artifacts = scenario.build()
 
     sensors = build_sensors_from_layout(artifacts.sensor_layout)
+    sensor_roles = [
+        str(getattr(node, "sensor_role", "track") or "track")
+        for node in artifacts.sensor_layout.sensors
+    ]
     fault_manager = build_fault_manager_from_bundle(bundle)
 
     truth_t = artifacts.truth.t
@@ -373,6 +471,7 @@ def run_single_simulation(bundle: ExperimentBundle) -> RunnerOutputs:
         "effective_fault_window": fault_meta.get("effective_fault_window"),
         "source_fault_mode": fault_meta.get("source_fault_mode"),
     }
+    _attach_phase1r_role_views(sim, sensors, sensor_roles)
 
     baseline_metrics = evaluate_baselines_from_sim(sim)
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Literal, Tuple
 
 SensorType = Literal["gps2d", "radar_rb", "aoa_only", "uwb_range_only"]
+SensorRole = Literal["track", "evidence"]
 
 
 @dataclass
@@ -30,6 +31,7 @@ class SensorNodeConfig:
     name: str
     sensor_type: SensorType
     position: Tuple[float, float]
+    sensor_role: SensorRole = "track"
     gps_sigma: float = 5.0
     gps_bias_rw_sigma: float = 0.02
     radar_sigma_r: float = 3.0

@@ -12,6 +12,8 @@ from .scenarios import (
     Phase1BalancedHeteroNominalScenario,
     Phase1ClusteredHeteroNominalScenario,
     Phase1ManeuverHeteroNominalScenario,
+    Phase1RBasic3Track2EvidenceScenario,
+    Phase1RManeuver3Track2EvidenceScenario,
 )
 
 
@@ -50,5 +52,11 @@ def build_scenario_from_bundle(bundle: ExperimentBundle) -> BaseScenario:
 
     if scene_name == "phase1_s3_maneuver_hetero_nominal":
         return Phase1ManeuverHeteroNominalScenario(scenario_cfg)
+
+    if scene_name == "phase1r_basic_3track_2evidence_nominal":
+        return Phase1RBasic3Track2EvidenceScenario(scenario_cfg)
+
+    if scene_name == "phase1r_maneuver_3track_2evidence_nominal":
+        return Phase1RManeuver3Track2EvidenceScenario(scenario_cfg)
 
     raise ValueError(f"Unknown scene_name: {scene_name}")

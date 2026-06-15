@@ -29,6 +29,60 @@ def _fuse_aa(xhat: torch.Tensor, w: torch.Tensor, active: torch.Tensor) -> torch
     return (ww.unsqueeze(-1) * xhat).sum(1) / denom
 
 
+def _fuse_aa_mm_diag(xhat: torch.Tensor, pdiag: torch.Tensor, w: torch.Tensor, active: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    eps = 1e-6
+    ww = w * active
+    if xhat.dim() == 2:
+        ww = ww / ww.sum(0).clamp_min(eps)
+        pred = (ww[:, None] * xhat).sum(0)
+        delta = xhat - pred[None, :]
+        p_fused = (ww[:, None] * (pdiag + delta * delta)).sum(0)
+        return pred, p_fused
+    ww = ww / ww.sum(1, keepdim=True).clamp_min(eps)
+    pred = (ww.unsqueeze(-1) * xhat).sum(1)
+    delta = xhat - pred.unsqueeze(1)
+    p_fused = (ww.unsqueeze(-1) * (pdiag + delta * delta)).sum(1)
+    return pred, p_fused
+
+
+def _apply_weight_cap(w: torch.Tensor, cap: torch.Tensor, active: torch.Tensor, max_iter: int = 8) -> torch.Tensor:
+    eps = 1e-6
+    if w.dim() == 1:
+        w2 = w.unsqueeze(0)
+        cap2 = cap.unsqueeze(0)
+        active2 = active.unsqueeze(0)
+        return _apply_weight_cap(w2, cap2, active2, max_iter=max_iter).squeeze(0)
+
+    active = (active > 0.0).to(w.dtype)
+    cap = cap.clamp_min(eps).clamp(max=1.0) * active
+    cap_sum = cap.sum(dim=1, keepdim=True).clamp_min(eps)
+    cap = torch.where(cap_sum < 1.0, cap / cap_sum, cap)
+
+    base = (w * active).clamp_min(0.0)
+    base = base / base.sum(dim=1, keepdim=True).clamp_min(eps)
+    fixed = torch.zeros_like(base)
+    free = active.bool()
+    remaining_mass = torch.ones((w.shape[0], 1), device=w.device, dtype=w.dtype)
+
+    for _ in range(max_iter):
+        free_f = free.to(w.dtype)
+        denom = (base * free_f).sum(dim=1, keepdim=True).clamp_min(eps)
+        proposal = base * free_f / denom * remaining_mass
+        over = (proposal > cap) & free
+        if not bool(over.any()):
+            fixed = fixed + proposal
+            break
+        add = torch.where(over, cap, torch.zeros_like(cap))
+        fixed = fixed + add
+        remaining_mass = (1.0 - fixed.sum(dim=1, keepdim=True)).clamp_min(0.0)
+        free = free & (~over)
+        if not bool(free.any()):
+            break
+
+    capped = fixed * active
+    return capped / capped.sum(dim=1, keepdim=True).clamp_min(eps)
+
+
 class _GraphFusionCore(FusionModelBase):
     def __init__(self, hidden_dim=64, valid_idx=8, pos_scale=1000.0, vel_scale=30.0, output_fusion_mode="info_diag"):
         super().__init__()
@@ -60,7 +114,7 @@ class _GraphFusionCore(FusionModelBase):
         h1 = self.upd(torch.cat([h0, torch.matmul(a, h0)], -1))
         return h1, a
 
-    def _decode(self, post_feat, h1, mask, raw_logits, return_weights, aux, cov_scale=None, weight_uniform_mix=0.0):
+    def _decode(self, post_feat, h1, mask, raw_logits, return_weights, aux, cov_scale=None, weight_uniform_mix=0.0, weight_cap=None):
         if mask is None:
             mask = torch.ones_like(raw_logits)
         valid = post_feat[..., self.valid_idx]
@@ -73,6 +127,8 @@ class _GraphFusionCore(FusionModelBase):
             denom = active.sum(dim=0 if post_feat.dim() == 2 else 1, keepdim=True).clamp_min(1e-6)
             uniform_w = active / denom
             w = (1.0 - mix) * w + mix * uniform_w
+        if weight_cap is not None:
+            w = _apply_weight_cap(w, weight_cap, active)
         xhat = post_feat[..., 0:4].clone()
         xhat[..., 0] *= self.pos_scale
         xhat[..., 1] *= self.pos_scale
@@ -85,6 +141,9 @@ class _GraphFusionCore(FusionModelBase):
             pred = _fuse_info_diag(xhat, pdiag, w)
         elif self.output_fusion_mode == "aa":
             pred = _fuse_aa(xhat, w, active)
+        elif self.output_fusion_mode == "aa_mm":
+            pred, fused_cov_diag = _fuse_aa_mm_diag(xhat, pdiag, w, active)
+            aux = {"fused_cov_diag": fused_cov_diag, **aux}
         else:
             raise ValueError(f"Unknown output_fusion_mode: {self.output_fusion_mode}")
         if return_weights:
@@ -98,7 +157,7 @@ class OriginalGNNFusion(_GraphFusionCore):
         super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
         self.node_enc = nn.Sequential(nn.Linear(in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
 
-    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None):
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
         h1, a = self._graph(self.node_enc(post_feat))
         raw = self.node_logit(h1).squeeze(-1)
         return self._decode(post_feat, h1, mask, raw, return_weights, {"attn_matrix": a})
@@ -116,7 +175,7 @@ class PostMeasDirectFusion(_GraphFusionCore):
             raise ValueError(f"{type(self).__name__} requires meas_feat.")
         return self.fuse_proj(torch.cat([self.post_enc(post_feat), self.meas_enc(meas_feat)], -1))
 
-    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None):
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
         h1, a = self._graph(self._build_h0(post_feat, meas_feat))
         raw = self.node_logit(h1).squeeze(-1)
         return self._decode(post_feat, h1, mask, raw, return_weights, {"attn_matrix": a})
@@ -176,7 +235,7 @@ class PostMeasSoftGateFusion(PostMeasDirectFusion):
         h0 = self.fuse_proj(torch.cat([h_post, h_meas_repr], -1))
         return h0, {"gate": gate, "gate_soft": gate_soft, "h_post": h_post, "h_meas": h_meas}
 
-    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None):
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
         if meas_feat is None:
             raise ValueError("PostMeasSoftGateFusion requires meas_feat.")
         h0, aux = self._build_h0_gate(post_feat, meas_feat)
@@ -210,6 +269,243 @@ class PostMeasSoftGateFusion(PostMeasDirectFusion):
         )
 
 
+class SkepticalNeuralFusionA(_GraphFusionCore):
+    def __init__(
+        self,
+        post_in_dim=9,
+        meas_in_dim=18,
+        hidden_dim=64,
+        meas_hidden_dim=64,
+        gate_hidden_dim=64,
+        valid_idx=8,
+        pos_scale=1000.0,
+        vel_scale=30.0,
+        gate_init_bias=0.0,
+        gate_weight_alpha=1.2,
+        gate_eps=1e-4,
+        base_logit_temperature=2.0,
+        weight_uniform_mix=0.02,
+        cov_calib_min_scale=1.0,
+        cov_calib_max_scale=30.0,
+        cov_weight_beta=0.5,
+        cap_min=0.05,
+        cap_max=0.85,
+        quarantine_penalty=2.0,
+        output_fusion_mode="aa_mm",
+    ):
+        super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
+        self.gate_weight_alpha = float(gate_weight_alpha)
+        self.gate_eps = float(gate_eps)
+        self.base_logit_temperature = max(float(base_logit_temperature), 1e-6)
+        self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
+        self.cov_calib_min_scale = float(cov_calib_min_scale)
+        self.cov_calib_max_scale = float(cov_calib_max_scale)
+        self.cov_weight_beta = float(cov_weight_beta)
+        self.cap_min = float(cap_min)
+        self.cap_max = float(cap_max)
+        self.quarantine_penalty = float(quarantine_penalty)
+
+        self.post_enc = nn.Sequential(nn.Linear(post_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.meas_enc = nn.Sequential(nn.Linear(meas_in_dim, meas_hidden_dim), nn.ReLU(), nn.Linear(meas_hidden_dim, meas_hidden_dim), nn.ReLU())
+        cross_dim = hidden_dim + meas_hidden_dim + 2 * min(hidden_dim, meas_hidden_dim)
+        self.cross_exam = nn.Sequential(
+            nn.Linear(cross_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.reliability_head = nn.Sequential(nn.Linear(hidden_dim, gate_hidden_dim), nn.ReLU(), nn.Linear(gate_hidden_dim, 1))
+        self.quarantine_head = nn.Sequential(nn.Linear(hidden_dim, gate_hidden_dim), nn.ReLU(), nn.Linear(gate_hidden_dim, 1))
+        self.cap_head = nn.Sequential(nn.Linear(hidden_dim, gate_hidden_dim), nn.ReLU(), nn.Linear(gate_hidden_dim, 1))
+        self.cov_calib = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.risk_head = nn.Sequential(nn.Linear(hidden_dim + 3, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        nn.init.constant_(self.reliability_head[-1].bias, float(gate_init_bias))
+
+    def _cross_features(self, h_post: torch.Tensor, h_meas: torch.Tensor) -> torch.Tensor:
+        d = min(h_post.shape[-1], h_meas.shape[-1])
+        hp = h_post[..., :d]
+        hm = h_meas[..., :d]
+        return torch.cat([h_post, h_meas, torch.abs(hp - hm), hp * hm], dim=-1)
+
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
+        if meas_feat is None:
+            raise ValueError("SkepticalNeuralFusionA requires meas_feat.")
+        h_post = self.post_enc(post_feat)
+        h_meas = self.meas_enc(meas_feat)
+        h0 = self.cross_exam(self._cross_features(h_post, h_meas))
+        h1, a = self._graph(h0)
+
+        valid = post_feat[..., self.valid_idx]
+        reliability_soft = torch.sigmoid(self.reliability_head(h1).squeeze(-1))
+        reliability = reliability_soft * valid
+        quarantine = torch.sigmoid(self.quarantine_head(h1).squeeze(-1)) * valid
+        cov_scale = (self.cov_calib_min_scale + F.softplus(self.cov_calib(h1).squeeze(-1))).clamp(max=self.cov_calib_max_scale)
+
+        cap_raw = torch.sigmoid(self.cap_head(h1).squeeze(-1))
+        cap = self.cap_min + (self.cap_max - self.cap_min) * cap_raw
+        cap = cap * (1.0 - 0.65 * quarantine).clamp_min(0.25)
+
+        base_logits = self.node_logit(h1).squeeze(-1) / self.base_logit_temperature
+        reliability_bias = self.gate_weight_alpha * torch.log(reliability.clamp_min(self.gate_eps))
+        cov_bias = -self.cov_weight_beta * torch.log(cov_scale.clamp_min(self.gate_eps))
+        quarantine_bias = -self.quarantine_penalty * quarantine
+        reliability_logits = base_logits + reliability_bias + cov_bias + quarantine_bias
+
+        risk_context = torch.stack([
+            1.0 - reliability_soft,
+            quarantine,
+            torch.log(cov_scale.clamp_min(self.gate_eps)),
+        ], dim=-1)
+        risk_node = torch.sigmoid(self.risk_head(torch.cat([h1, risk_context], dim=-1)).squeeze(-1))
+
+        aux = {
+            "attn_matrix": a,
+            "h_post": h_post,
+            "h_meas": h_meas,
+            "gate": reliability,
+            "gate_soft": reliability_soft,
+            "reliability": reliability,
+            "quarantine": quarantine,
+            "weight_cap": cap,
+            "risk_node": risk_node,
+            "base_weight_logits": base_logits,
+            "raw_weight_logits": reliability_logits,
+            "gate_weight_bias": reliability_bias,
+            "cov_weight_bias": cov_bias,
+            "quarantine_weight_bias": quarantine_bias,
+            "reliability_logits": reliability_logits,
+            "cov_scale": cov_scale,
+        }
+        out = self._decode(
+            post_feat,
+            h1,
+            mask,
+            reliability_logits,
+            return_weights,
+            aux,
+            cov_scale=cov_scale,
+            weight_uniform_mix=self.weight_uniform_mix,
+            weight_cap=cap,
+        )
+        if out.weights is not None:
+            out.aux["risk"] = (out.weights * risk_node).sum(dim=0 if post_feat.dim() == 2 else 1)
+        return out
+
+
+class Phase1RRGCF(_GraphFusionCore):
+    """Corrected RGCF for Phase1R: evidence informs reliability, but only track nodes fuse."""
+
+    def __init__(
+        self,
+        post_in_dim=9,
+        meas_in_dim=18,
+        evidence_in_dim=16,
+        hidden_dim=64,
+        meas_hidden_dim=64,
+        gate_hidden_dim=64,
+        valid_idx=8,
+        pos_scale=1000.0,
+        vel_scale=30.0,
+        gate_init_bias=0.5,
+        gate_weight_alpha=1.0,
+        gate_eps=1e-4,
+        base_logit_temperature=1.5,
+        weight_uniform_mix=0.02,
+        cov_calib_min_scale=1.0,
+        cov_calib_max_scale=25.0,
+        cov_weight_beta=0.35,
+        output_fusion_mode="info_diag",
+    ):
+        super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
+        self.gate_weight_alpha = float(gate_weight_alpha)
+        self.gate_eps = float(gate_eps)
+        self.base_logit_temperature = max(float(base_logit_temperature), 1e-6)
+        self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
+        self.cov_calib_min_scale = float(cov_calib_min_scale)
+        self.cov_calib_max_scale = float(cov_calib_max_scale)
+        self.cov_weight_beta = float(cov_weight_beta)
+
+        self.post_enc = nn.Sequential(nn.Linear(post_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.meas_enc = nn.Sequential(nn.Linear(meas_in_dim, meas_hidden_dim), nn.ReLU(), nn.Linear(meas_hidden_dim, meas_hidden_dim), nn.ReLU())
+        self.evidence_enc = nn.Sequential(nn.Linear(evidence_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.evidence_score = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        cross_dim = hidden_dim + meas_hidden_dim + hidden_dim + 2 * min(hidden_dim, meas_hidden_dim)
+        self.cross = nn.Sequential(nn.Linear(cross_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.reliability_head = nn.Sequential(nn.Linear(hidden_dim, gate_hidden_dim), nn.ReLU(), nn.Linear(gate_hidden_dim, 1))
+        self.cov_calib = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        nn.init.constant_(self.reliability_head[-1].bias, float(gate_init_bias))
+
+    def _pool_evidence(self, evidence_feat, evidence_mask, like):
+        if evidence_feat is None:
+            shape = (*like.shape[:-1], self.hidden_dim)
+            if like.dim() == 2:
+                shape = (self.hidden_dim,)
+            return like.new_zeros(shape)
+        h_ev = self.evidence_enc(evidence_feat)
+        if evidence_mask is None:
+            evidence_mask = torch.ones(h_ev.shape[:-1], device=h_ev.device, dtype=h_ev.dtype)
+        score = self.evidence_score(h_ev).squeeze(-1) + (evidence_mask - 1.0) * 1e9
+        alpha = torch.softmax(score, dim=-1)
+        pooled = (alpha.unsqueeze(-1) * h_ev).sum(dim=-2)
+        return pooled
+
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
+        if meas_feat is None:
+            raise ValueError("Phase1RRGCF requires track meas_feat.")
+        h_post = self.post_enc(post_feat)
+        h_meas = self.meas_enc(meas_feat)
+        h_ev = self._pool_evidence(evidence_feat, evidence_mask, h_post)
+        if h_post.dim() == 3:
+            h_ev_node = h_ev.unsqueeze(1).expand(-1, h_post.shape[1], -1)
+        else:
+            h_ev_node = h_ev.unsqueeze(0).expand(h_post.shape[0], -1)
+        d = min(h_post.shape[-1], h_meas.shape[-1])
+        cross_feat = torch.cat([
+            h_post,
+            h_meas,
+            h_ev_node,
+            torch.abs(h_post[..., :d] - h_meas[..., :d]),
+            h_post[..., :d] * h_meas[..., :d],
+        ], dim=-1)
+        h0 = self.cross(cross_feat)
+        h1, a = self._graph(h0)
+
+        valid = post_feat[..., self.valid_idx]
+        reliability_soft = torch.sigmoid(self.reliability_head(h1).squeeze(-1))
+        reliability = reliability_soft * valid
+        cov_scale = (self.cov_calib_min_scale + F.softplus(self.cov_calib(h1).squeeze(-1))).clamp(max=self.cov_calib_max_scale)
+        base_logits = self.node_logit(h1).squeeze(-1) / self.base_logit_temperature
+        reliability_bias = self.gate_weight_alpha * torch.log(reliability.clamp_min(self.gate_eps))
+        cov_bias = -self.cov_weight_beta * torch.log(cov_scale.clamp_min(self.gate_eps))
+        reliability_logits = base_logits + reliability_bias + cov_bias
+
+        aux = {
+            "attn_matrix": a,
+            "h_post": h_post,
+            "h_meas": h_meas,
+            "h_evidence": h_ev,
+            "gate": reliability,
+            "gate_soft": reliability_soft,
+            "reliability": reliability,
+            "base_weight_logits": base_logits,
+            "raw_weight_logits": reliability_logits,
+            "gate_weight_bias": reliability_bias,
+            "cov_weight_bias": cov_bias,
+            "reliability_logits": reliability_logits,
+            "cov_scale": cov_scale,
+        }
+        return self._decode(
+            post_feat,
+            h1,
+            mask,
+            reliability_logits,
+            return_weights,
+            aux,
+            cov_scale=cov_scale,
+            weight_uniform_mix=self.weight_uniform_mix,
+        )
+
+
 class PostMeasWindowDirectFusion(PostMeasDirectFusion):
     def __init__(self, post_in_dim=9, meas_in_dim=18, hidden_dim=64, meas_hidden_dim=64, window_size=6, valid_idx=8, pos_scale=1000.0, vel_scale=30.0, output_fusion_mode="info_diag"):
         super().__init__(post_in_dim, meas_in_dim, hidden_dim, meas_hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
@@ -228,7 +524,7 @@ class PostMeasWindowDirectFusion(PostMeasDirectFusion):
         _, hm = self.meas_gru(meas_win.reshape(b * n, l, dm))
         return self.fuse_proj(torch.cat([hp.squeeze(0), hm.squeeze(0)], -1)).reshape(b, n, self.hidden_dim)
 
-    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None):
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
         if post_win is None or meas_win is None:
             raise ValueError("PostMeasWindowDirectFusion requires post_win and meas_win.")
         h1, a = self._graph(self._encode_window(post_win, meas_win))

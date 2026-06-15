@@ -16,6 +16,14 @@ class MeasFeatureOutput:
     meta: Dict
 
 
+@dataclass
+class EvidenceFeatureOutput:
+    node_feat: np.ndarray
+    mask: np.ndarray
+    t: np.ndarray
+    meta: Dict
+
+
 def _two(x):
     out = np.zeros(2, dtype=np.float32)
     if x is not None:
@@ -64,14 +72,17 @@ def _peer_deviation_features(
 
 
 def build_meas_node_features_from_sim(sim: Dict[str, np.ndarray], bundle: ExperimentBundle) -> MeasFeatureOutput:
-    valid = np.asarray(sim["valid_mask"], dtype=np.float32)
-    xpred = np.asarray(sim["xpred"], dtype=np.float64)
+    valid = np.asarray(sim.get("track_valid_mask", sim["valid_mask"]), dtype=np.float32)
+    xpred = np.asarray(sim.get("track_xpred", sim["xpred"]), dtype=np.float64)
     k, n = valid.shape
     feature_dim = 18
     node = np.zeros((k, n, feature_dim), dtype=np.float32)
-    sensor_pos = np.asarray(sim.get("sensor_pos", np.zeros((n, 2))), dtype=np.float64)
-    names = list(sim.get("sensor_type_names", ["gps2d"] * n))
+    sensor_pos = np.asarray(sim.get("track_sensor_pos", sim.get("sensor_pos", np.zeros((n, 2)))), dtype=np.float64)
+    names = list(sim.get("track_sensor_type_names", sim.get("sensor_type_names", ["gps2d"] * n)))
     order = ["gps2d", "radar_rb", "aoa_only", "uwb_range_only"]
+    innovation_store = sim.get("track_innovation", sim.get("innovation_store", [[None]]))
+    r_store = sim.get("track_R", sim.get("R_store", [[None]]))
+    nis_store = sim.get("track_nis", sim.get("nis_store", np.zeros((k, n))))
     for i, name in enumerate(names):
         if str(name) in order:
             node[:, i, 8 + order.index(str(name))] = 1.0
@@ -81,9 +92,9 @@ def build_meas_node_features_from_sim(sim: Dict[str, np.ndarray], bundle: Experi
         for i in range(n):
             if valid[ti, i] < 0.5:
                 continue
-            innov = sim.get("innovation_store", [[None]])[ti, i]
-            r = sim.get("R_store", [[None]])[ti, i]
-            nis = sim.get("nis_store", np.zeros((k, n)))[ti, i]
+            innov = innovation_store[ti, i]
+            r = r_store[ti, i]
+            nis = nis_store[ti, i]
             innov2 = _two(innov)
             diag2 = np.ones(2, dtype=np.float32)
             if r is not None:
@@ -102,14 +113,59 @@ def build_meas_node_features_from_sim(sim: Dict[str, np.ndarray], bundle: Experi
             node[ti, i, 12] = valid[ti, i]
     node[..., 13] = _rolling_mean(log_nis_all, valid, window=30)
     node[..., 14] = np.clip(_rolling_mean(abs_white_innov_all, valid, window=30), 0.0, 20.0)
-    pos_dev, vel_dev = _peer_deviation_features(
-        sim,
-        valid,
-        pos_scale=float(bundle.scenario.pos_scale),
-        vel_scale=float(bundle.scenario.vel_scale),
-    )
-    node[..., 15] = np.clip(pos_dev, 0.0, 5.0)
-    node[..., 16] = np.clip(vel_dev, 0.0, 5.0)
+    if bool(getattr(bundle.model, "use_peer_consistency_features", False)):
+        pos_dev, vel_dev = _peer_deviation_features(
+            {"xhat": sim.get("track_xhat", sim.get("xhat")), "xpred": xpred},
+            valid,
+            pos_scale=float(bundle.scenario.pos_scale),
+            vel_scale=float(bundle.scenario.vel_scale),
+        )
+        node[..., 15] = np.clip(pos_dev, 0.0, 5.0)
+        node[..., 16] = np.clip(vel_dev, 0.0, 5.0)
     node[..., 17] = 1.0
     node[valid <= 0.5, :] = 0.0
     return MeasFeatureOutput(node, valid.copy(), np.asarray(sim["t"], dtype=np.float32), {"feature_dim": feature_dim})
+
+
+def build_evidence_node_features_from_sim(sim: Dict[str, np.ndarray], bundle: ExperimentBundle) -> EvidenceFeatureOutput | None:
+    if "evidence_z" not in sim:
+        return None
+    valid = np.asarray(sim.get("evidence_valid_mask"), dtype=np.float32)
+    k, e = valid.shape
+    feature_dim = 16
+    node = np.zeros((k, e, feature_dim), dtype=np.float32)
+    sensor_pos = np.asarray(sim.get("evidence_sensor_pos", np.zeros((e, 2))), dtype=np.float64)
+    names = list(sim.get("evidence_sensor_type_names", ["aoa_only"] * e))
+    order = ["gps2d", "radar_rb", "aoa_only", "uwb_range_only"]
+    z_store = sim.get("evidence_z")
+    r_store = sim.get("evidence_R")
+    residual_prior = np.asarray(sim.get("evidence_residual_to_prior", np.full((k, e), np.nan)), dtype=np.float64)
+    residual_track = np.asarray(sim.get("evidence_residual_to_track", np.full((k, e, 1), np.nan)), dtype=np.float64)
+    residual_track_mean = np.nanmean(residual_track, axis=2) if residual_track.ndim == 3 else np.zeros((k, e))
+    residual_track_min = np.nanmin(residual_track, axis=2) if residual_track.ndim == 3 else np.zeros((k, e))
+
+    for i, name in enumerate(names):
+        if str(name) in order:
+            node[:, i, 4 + order.index(str(name))] = 1.0
+    for ti in range(k):
+        for i in range(e):
+            if valid[ti, i] < 0.5:
+                continue
+            z = _two(z_store[ti, i])
+            r = r_store[ti, i]
+            diag2 = np.ones(2, dtype=np.float32)
+            if r is not None:
+                diag = np.diag(np.asarray(r, dtype=np.float64)) if np.asarray(r).ndim == 2 else np.asarray(r, dtype=np.float64).reshape(-1)
+                diag2 = _two(diag)
+            node[ti, i, 0:2] = np.tanh(z / np.sqrt(np.clip(diag2, 1e-6, None)) / 10.0)
+            node[ti, i, 2:4] = np.clip(np.log1p(np.clip(diag2, 1e-9, None)), 0.0, 8.0)
+            node[ti, i, 8] = sensor_pos[i, 0] / float(bundle.scenario.pos_scale)
+            node[ti, i, 9] = sensor_pos[i, 1] / float(bundle.scenario.pos_scale)
+            node[ti, i, 10] = np.clip(np.log1p(max(float(residual_prior[ti, i]) if np.isfinite(residual_prior[ti, i]) else 0.0, 0.0)), 0.0, 6.0)
+            node[ti, i, 11] = np.clip(np.log1p(max(float(residual_track_mean[ti, i]) if np.isfinite(residual_track_mean[ti, i]) else 0.0, 0.0)), 0.0, 6.0)
+            node[ti, i, 12] = np.clip(np.log1p(max(float(residual_track_min[ti, i]) if np.isfinite(residual_track_min[ti, i]) else 0.0, 0.0)), 0.0, 6.0)
+            node[ti, i, 13] = valid[ti, i]
+            node[ti, i, 14] = 1.0
+            node[ti, i, 15] = float(i + 1) / max(float(e), 1.0)
+    node[valid <= 0.5, :] = 0.0
+    return EvidenceFeatureOutput(node, valid.copy(), np.asarray(sim["t"], dtype=np.float32), {"feature_dim": feature_dim})

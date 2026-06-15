@@ -62,9 +62,9 @@ def _peer_consistency_features(
 
 
 def build_post_node_features_from_sim(sim: Dict[str, np.ndarray], bundle: ExperimentBundle) -> PostFeatureOutput:
-    xhat = np.asarray(sim["xhat"], dtype=np.float64)
-    phat = np.asarray(sim["Phat"], dtype=np.float64)
-    valid = np.asarray(sim["valid_mask"], dtype=np.float64)
+    xhat = np.asarray(sim.get("track_xhat", sim["xhat"]), dtype=np.float64)
+    phat = np.asarray(sim.get("track_Phat", sim["Phat"]), dtype=np.float64)
+    valid = np.asarray(sim.get("track_valid_mask", sim["valid_mask"]), dtype=np.float64)
     k, n, _ = xhat.shape
     use_peer = bool(getattr(bundle.model, "use_peer_consistency_features", False))
     zero_peer = bool(getattr(bundle.model, "zero_peer_consistency_features", False))

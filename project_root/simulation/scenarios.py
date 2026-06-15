@@ -14,6 +14,7 @@ from .sensor_layouts import (
     build_asymmetric_4sensor_layout,
     build_hetero_4sensor_layout,
     build_phase1_clustered_hetero_4sensor_layout,
+    build_phase1r_3track_2evidence_layout,
 )
 
 
@@ -173,6 +174,43 @@ class Phase1ManeuverHeteroNominalScenario(Hetero4SensorScenario):
         motion.s_disturb_period = 5.0
         motion.sigma_a_base = 1.4
         motion.sigma_a_turn = 2.5
+        return motion
+
+
+class Phase1RBasic3Track2EvidenceScenario(BaseScenario):
+    """Phase1R S1R: corrected nominal scene with 3 track sensors and 2 evidence sensors."""
+
+    def build_motion_config(self) -> MotionConfig:
+        motion = deepcopy(self.cfg.motion)
+        motion.init_v = 15.0
+        motion.a_segmentA = 0.25
+        motion.yaw_rate_B_deg = 3.0
+        motion.yaw_rate_D_deg = -3.5
+        motion.yaw_rate_D_duration = 12.0
+        motion.s_disturb_amp_deg = 1.0
+        motion.s_disturb_period = 9.0
+        motion.sigma_a_base = 0.8
+        motion.sigma_a_turn = 1.2
+        return motion
+
+    def build_sensor_layout(self) -> SensorLayoutConfig:
+        return build_phase1r_3track_2evidence_layout()
+
+
+class Phase1RManeuver3Track2EvidenceScenario(Phase1RBasic3Track2EvidenceScenario):
+    """Phase1R S2R: ordinary maneuver scene with the same corrected sensor roles."""
+
+    def build_motion_config(self) -> MotionConfig:
+        motion = deepcopy(self.cfg.motion)
+        motion.init_v = 18.0
+        motion.a_segmentA = 0.45
+        motion.yaw_rate_B_deg = 5.5
+        motion.yaw_rate_D_deg = -6.0
+        motion.yaw_rate_D_duration = 16.0
+        motion.s_disturb_amp_deg = 2.5
+        motion.s_disturb_period = 6.5
+        motion.sigma_a_base = 1.1
+        motion.sigma_a_turn = 1.9
         return motion
 
 

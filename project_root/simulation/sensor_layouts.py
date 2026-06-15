@@ -113,6 +113,59 @@ def build_hetero_4sensor_layout() -> SensorLayoutConfig:
     )
 
 
+def build_phase1r_3track_2evidence_layout() -> SensorLayoutConfig:
+    """Phase1R corrected layout: 3 posterior-capable trackers + 2 evidence sensors."""
+    return SensorLayoutConfig(
+        sensors=[
+            SensorNodeConfig(
+                sensor_id=1,
+                name="T1_gps2d_track",
+                sensor_type="gps2d",
+                sensor_role="track",
+                position=(-900.0, -250.0),
+                gps_sigma=4.0,
+                gps_bias_rw_sigma=0.015,
+            ),
+            SensorNodeConfig(
+                sensor_id=2,
+                name="T2_radar_rb_track",
+                sensor_type="radar_rb",
+                sensor_role="track",
+                position=(950.0, -150.0),
+                radar_sigma_r=3.0,
+                radar_sigma_theta_deg=0.45,
+            ),
+            SensorNodeConfig(
+                sensor_id=3,
+                name="T3_radar_rb_track",
+                sensor_type="radar_rb",
+                sensor_role="track",
+                position=(-250.0, 950.0),
+                radar_sigma_r=3.5,
+                radar_sigma_theta_deg=0.50,
+            ),
+            SensorNodeConfig(
+                sensor_id=4,
+                name="E1_aoa_evidence",
+                sensor_type="aoa_only",
+                sensor_role="evidence",
+                position=(850.0, 850.0),
+                aoa_sigma_theta_deg=0.7,
+            ),
+            SensorNodeConfig(
+                sensor_id=5,
+                name="E2_uwb_evidence",
+                sensor_type="uwb_range_only",
+                sensor_role="evidence",
+                position=(-850.0, 650.0),
+                uwb_sigma_r=1.8,
+                uwb_far_r0=1400.0,
+                uwb_far_k=0.0015,
+            ),
+        ]
+    )
+
+
 def build_phase1_clustered_hetero_4sensor_layout() -> SensorLayoutConfig:
     """
     Phase 1 S2 nominal layout.

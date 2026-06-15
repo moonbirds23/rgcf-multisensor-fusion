@@ -6,7 +6,7 @@ from typing import Dict, Optional
 import numpy as np
 
 from core.types import ExperimentBundle
-from .meas_features import MeasFeatureOutput, build_meas_node_features_from_sim
+from .meas_features import EvidenceFeatureOutput, MeasFeatureOutput, build_evidence_node_features_from_sim, build_meas_node_features_from_sim
 from .post_features import PostFeatureOutput, build_post_node_features_from_sim
 
 
@@ -14,6 +14,7 @@ from .post_features import PostFeatureOutput, build_post_node_features_from_sim
 class FeatureBundle:
     post: PostFeatureOutput
     meas: Optional[MeasFeatureOutput]
+    evidence: Optional[EvidenceFeatureOutput]
     target: np.ndarray
     t: np.ndarray
 
@@ -21,4 +22,5 @@ class FeatureBundle:
 def build_feature_bundle_from_sim(sim: Dict[str, np.ndarray], bundle: ExperimentBundle) -> FeatureBundle:
     post = build_post_node_features_from_sim(sim, bundle)
     meas = build_meas_node_features_from_sim(sim, bundle) if bool(getattr(bundle.model, "use_meas_stream", False)) or bool(getattr(bundle.model, "use_gate", False)) or bool(getattr(bundle.model, "use_temporal", False)) else None
-    return FeatureBundle(post=post, meas=meas, target=post.target, t=post.t)
+    evidence = build_evidence_node_features_from_sim(sim, bundle) if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf" else None
+    return FeatureBundle(post=post, meas=meas, evidence=evidence, target=post.target, t=post.t)

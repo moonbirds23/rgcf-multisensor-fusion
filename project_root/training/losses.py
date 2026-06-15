@@ -41,6 +41,10 @@ def compute_fusion_loss_with_gate(
     gate_mask: torch.Tensor | None = None,
     weights: torch.Tensor | None = None,
     cov_scale: torch.Tensor | None = None,
+    risk: torch.Tensor | None = None,
+    quarantine: torch.Tensor | None = None,
+    weight_cap: torch.Tensor | None = None,
+    fused_cov_diag: torch.Tensor | None = None,
     vel_weight: float = 0.2,
     gate_weight: float = 0.05,
     gate_prior_weight: float = 0.005,
@@ -50,6 +54,15 @@ def compute_fusion_loss_with_gate(
     cov_fault_normal_margin: float = 1.0,
     fault_weight_loss_weight: float = 0.0,
     fault_weight_margin: float = 0.1,
+    risk_loss_weight: float = 0.0,
+    overconf_loss_weight: float = 0.0,
+    underconf_loss_weight: float = 0.0,
+    risk_error_scale: float = 20.0,
+    quarantine_loss_weight: float = 0.0,
+    cap_loss_weight: float = 0.0,
+    fused_nll_weight: float = 0.0,
+    tail_loss_weight: float = 0.0,
+    tail_error_scale: float = 25.0,
     balanced_gate_loss: bool = True,
     fault_gate_threshold: float = 0.5,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -145,6 +158,59 @@ def compute_fusion_loss_with_gate(
             fault_weight_loss = (excess ** 2).mean()
             fault_weight_above_margin_rate = (fault_weights > float(fault_weight_margin)).float().mean()
 
+    risk_loss = pred.new_tensor(0.0)
+    overconf_loss = pred.new_tensor(0.0)
+    underconf_loss = pred.new_tensor(0.0)
+    mean_risk = pred.new_tensor(0.0)
+    if risk is not None:
+        risk_clamped = risk.clamp(1e-4, 1.0 - 1e-4)
+        pos_err = torch.linalg.norm(pred[:, 0:2] - target[:, 0:2], dim=1)
+        err_scale = max(float(risk_error_scale), 1e-6)
+        err_norm = pos_err / err_scale
+        risk_target = (1.0 - torch.exp(-err_norm)).detach().clamp(0.0, 1.0)
+        risk_loss = ((risk_clamped - risk_target) ** 2).mean()
+        overconf_loss = (torch.exp(-risk_clamped) * err_norm.detach()).mean()
+        underconf_loss = (risk_clamped * torch.exp(-err_norm.detach())).mean()
+        mean_risk = risk_clamped.mean()
+
+    quarantine_loss = pred.new_tensor(0.0)
+    mean_quarantine = pred.new_tensor(0.0)
+    if quarantine is not None:
+        q = quarantine.clamp(1e-4, 1.0 - 1e-4)
+        mean_quarantine = q.mean()
+        if gate_target is not None and gate_mask is not None:
+            supervised = gate_mask > 0.5
+            if torch.any(supervised):
+                q_target = (gate_target < fault_gate_threshold).to(q.dtype)
+                quarantine_loss = F.binary_cross_entropy(
+                    q[supervised],
+                    q_target[supervised],
+                    reduction="mean",
+                )
+
+    cap_loss = pred.new_tensor(0.0)
+    mean_weight_cap = pred.new_tensor(0.0)
+    if weight_cap is not None:
+        mean_weight_cap = weight_cap.mean()
+        if gate_target is not None and gate_mask is not None:
+            fault_mask = (gate_mask > 0.5) & (gate_target < fault_gate_threshold)
+            if torch.any(fault_mask):
+                cap_excess = F.relu(weight_cap[fault_mask] - float(fault_weight_margin))
+                cap_loss = (cap_excess ** 2).mean()
+
+    fused_nll_loss = pred.new_tensor(0.0)
+    if fused_cov_diag is not None and float(fused_nll_weight) > 0.0:
+        var = fused_cov_diag.clamp_min(1e-4)
+        err = pred - target
+        fused_nll_loss = 0.5 * ((err * err) / var + torch.log(var)).mean()
+
+    tail_loss = pred.new_tensor(0.0)
+    if float(tail_loss_weight) > 0.0:
+        pos_err = torch.linalg.norm(pred[:, 0:2] - target[:, 0:2], dim=1)
+        scale = max(float(tail_error_scale), 1e-6)
+        tail = F.relu(pos_err - scale)
+        tail_loss = (tail * tail).mean()
+
     total = (
         track_loss
         + gate_weight * gate_loss
@@ -152,6 +218,13 @@ def compute_fusion_loss_with_gate(
         + cov_prior_weight * cov_prior_loss
         + cov_sep_weight * cov_sep_loss
         + fault_weight_loss_weight * fault_weight_loss
+        + risk_loss_weight * risk_loss
+        + overconf_loss_weight * overconf_loss
+        + underconf_loss_weight * underconf_loss
+        + quarantine_loss_weight * quarantine_loss
+        + cap_loss_weight * cap_loss
+        + fused_nll_weight * fused_nll_loss
+        + tail_loss_weight * tail_loss
     )
 
     # Batch all .item() calls (no redundant .cpu() calls)
@@ -171,6 +244,16 @@ def compute_fusion_loss_with_gate(
         "mean_cov_scale": mean_cov_scale.detach().item(),
         "mean_cov_scale_fault": mean_cov_scale_fault.detach().item(),
         "mean_cov_scale_normal": mean_cov_scale_normal.detach().item(),
+        "loss_risk": risk_loss.detach().item(),
+        "loss_overconf": overconf_loss.detach().item(),
+        "loss_underconf": underconf_loss.detach().item(),
+        "mean_risk": mean_risk.detach().item(),
+        "loss_quarantine": quarantine_loss.detach().item(),
+        "mean_quarantine": mean_quarantine.detach().item(),
+        "loss_cap": cap_loss.detach().item(),
+        "mean_weight_cap": mean_weight_cap.detach().item(),
+        "loss_fused_nll": fused_nll_loss.detach().item(),
+        "loss_tail": tail_loss.detach().item(),
     })
 
     return total, info

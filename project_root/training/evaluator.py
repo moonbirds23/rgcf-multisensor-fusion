@@ -42,6 +42,12 @@ def evaluate_loader(
             if "meas_feat" in batch:
                 meas_feat = batch["meas_feat"].to(device, non_blocking=True)
 
+            evidence_feat = None
+            evidence_mask = None
+            if "evidence_feat" in batch:
+                evidence_feat = batch["evidence_feat"].to(device, non_blocking=True)
+                evidence_mask = batch["evidence_mask"].to(device, non_blocking=True)
+
             post_win = None
             meas_win = None
             if "post_win" in batch:
@@ -52,6 +58,8 @@ def evaluate_loader(
                 post_feat=post_feat,
                 mask=mask,
                 meas_feat=meas_feat,
+                evidence_feat=evidence_feat,
+                evidence_mask=evidence_mask,
                 return_weights=False,
                 post_win=post_win,
                 meas_win=meas_win,
@@ -133,6 +141,9 @@ def evaluate_single_sim_fusion_with_timeseries(
     weights_all: List[np.ndarray] = []
     gates_all: List[np.ndarray] = []
     cov_scale_all: List[np.ndarray] = []
+    cap_all: List[np.ndarray] = []
+    quarantine_all: List[np.ndarray] = []
+    risk_all: List[np.ndarray] = []
     gate_target_all: List[np.ndarray] = []
     gate_mask_all: List[np.ndarray] = []
     valid_all: List[np.ndarray] = []
@@ -149,6 +160,12 @@ def evaluate_single_sim_fusion_with_timeseries(
             if "meas_feat" in batch:
                 meas_feat = batch["meas_feat"].to(device, non_blocking=True)
 
+            evidence_feat = None
+            evidence_mask = None
+            if "evidence_feat" in batch:
+                evidence_feat = batch["evidence_feat"].to(device, non_blocking=True)
+                evidence_mask = batch["evidence_mask"].to(device, non_blocking=True)
+
             post_win = None
             meas_win = None
             if "post_win" in batch:
@@ -159,6 +176,8 @@ def evaluate_single_sim_fusion_with_timeseries(
                 post_feat=post_feat,
                 mask=mask,
                 meas_feat=meas_feat,
+                evidence_feat=evidence_feat,
+                evidence_mask=evidence_mask,
                 return_weights=True,
                 post_win=post_win,
                 meas_win=meas_win,
@@ -180,6 +199,18 @@ def evaluate_single_sim_fusion_with_timeseries(
             cov_scale = out.aux.get("cov_scale", None)
             if cov_scale is not None:
                 cov_scale_all.append(cov_scale.detach().cpu().numpy())
+
+            cap = out.aux.get("weight_cap", None)
+            if cap is not None:
+                cap_all.append(cap.detach().cpu().numpy())
+
+            quarantine = out.aux.get("quarantine", None)
+            if quarantine is not None:
+                quarantine_all.append(quarantine.detach().cpu().numpy())
+
+            risk = out.aux.get("risk", None)
+            if risk is not None:
+                risk_all.append(risk.detach().cpu().numpy())
 
             if "gate_target" in batch:
                 gate_target_all.append(batch["gate_target"].cpu().numpy())
@@ -242,6 +273,30 @@ def evaluate_single_sim_fusion_with_timeseries(
         for i in range(N):
             out_dict[f"mean_cov_scale_s{i+1}"] = float(np.mean(c_arr[:, i]))
 
+    cap_arr = None
+    if len(cap_all) > 0:
+        cap_arr = np.concatenate(cap_all, axis=0)
+        out_dict["mean_weight_cap"] = float(np.mean(cap_arr))
+        out_dict["std_weight_cap"] = float(np.std(cap_arr))
+        N = cap_arr.shape[1]
+        for i in range(N):
+            out_dict[f"mean_weight_cap_s{i+1}"] = float(np.mean(cap_arr[:, i]))
+
+    q_arr = None
+    if len(quarantine_all) > 0:
+        q_arr = np.concatenate(quarantine_all, axis=0)
+        out_dict["mean_quarantine"] = float(np.mean(q_arr))
+        out_dict["std_quarantine"] = float(np.std(q_arr))
+        N = q_arr.shape[1]
+        for i in range(N):
+            out_dict[f"mean_quarantine_s{i+1}"] = float(np.mean(q_arr[:, i]))
+
+    risk_arr = None
+    if len(risk_all) > 0:
+        risk_arr = np.concatenate(risk_all, axis=0)
+        out_dict["mean_risk"] = float(np.mean(risk_arr))
+        out_dict["std_risk"] = float(np.std(risk_arr))
+
     gt_arr = None
     gm_arr = None
     if len(gate_target_all) > 0:
@@ -279,6 +334,18 @@ def evaluate_single_sim_fusion_with_timeseries(
             if np.any(normal_mask):
                 out_dict["mean_cov_scale_normal"] = float(np.mean(c_arr[normal_mask]))
 
+        if cap_arr is not None:
+            if np.any(fault_mask):
+                out_dict["mean_weight_cap_fault"] = float(np.mean(cap_arr[fault_mask]))
+            if np.any(normal_mask):
+                out_dict["mean_weight_cap_normal"] = float(np.mean(cap_arr[normal_mask]))
+
+        if q_arr is not None:
+            if np.any(fault_mask):
+                out_dict["mean_quarantine_fault"] = float(np.mean(q_arr[fault_mask]))
+            if np.any(normal_mask):
+                out_dict["mean_quarantine_normal"] = float(np.mean(q_arr[normal_mask]))
+
         if "mean_gate_fault" in out_dict and "mean_gate_normal" in out_dict:
             out_dict["gate_separation_normal_minus_fault"] = float(
                 out_dict["mean_gate_normal"] - out_dict["mean_gate_fault"]
@@ -308,6 +375,14 @@ def evaluate_single_sim_fusion_with_timeseries(
             vals = c_arr[region_mask]
             if vals.size > 0:
                 out_dict[f"{prefix}_mean_cov_scale"] = float(np.mean(vals))
+        if cap_arr is not None:
+            vals = cap_arr[region_mask]
+            if vals.size > 0:
+                out_dict[f"{prefix}_mean_weight_cap"] = float(np.mean(vals))
+        if q_arr is not None:
+            vals = q_arr[region_mask]
+            if vals.size > 0:
+                out_dict[f"{prefix}_mean_quarantine"] = float(np.mean(vals))
 
     fault_active_arr = None
     if "fault_active_mask" in sim:
@@ -340,6 +415,10 @@ def evaluate_single_sim_fusion_with_timeseries(
         n_nodes = g_arr.shape[1]
     elif c_arr is not None:
         n_nodes = c_arr.shape[1]
+    elif cap_arr is not None:
+        n_nodes = cap_arr.shape[1]
+    elif q_arr is not None:
+        n_nodes = q_arr.shape[1]
 
     # per-timestep position error
     error_pos_arr = np.sqrt(np.sum((pred_arr[:, 0:2] - true_arr[:, 0:2]) ** 2, axis=1))
@@ -374,16 +453,19 @@ def evaluate_single_sim_fusion_with_timeseries(
         metrics = {}
         metrics["overall_rmse_pos"] = float(np.sqrt(np.mean(err_arr ** 2)))
         metrics["overall_p95_error_pos"] = float(np.percentile(err_arr, 95))
+        metrics["overall_p99_error_pos"] = float(np.percentile(err_arr, 99))
         metrics["overall_max_error_pos"] = float(np.max(err_arr))
 
         fault_sel = fault_any_arr > 0.5
         if fault_sel.any():
             metrics["fault_window_rmse_pos"] = float(np.sqrt(np.mean(err_arr[fault_sel] ** 2)))
             metrics["fault_window_p95_error_pos"] = float(np.percentile(err_arr[fault_sel], 95))
+            metrics["fault_window_p99_error_pos"] = float(np.percentile(err_arr[fault_sel], 99))
             metrics["fault_window_max_error_pos"] = float(np.max(err_arr[fault_sel]))
         else:
             metrics["fault_window_rmse_pos"] = float("nan")
             metrics["fault_window_p95_error_pos"] = float("nan")
+            metrics["fault_window_p99_error_pos"] = float("nan")
             metrics["fault_window_max_error_pos"] = float("nan")
 
         pre_sel = t_arr < t0
@@ -451,6 +533,17 @@ def evaluate_single_sim_fusion_with_timeseries(
         if c_arr is not None:
             for i in range(n_nodes):
                 row[f"cov_scale_s{i+1}"] = float(c_arr[k, i])
+
+        if cap_arr is not None:
+            for i in range(n_nodes):
+                row[f"weight_cap_s{i+1}"] = float(cap_arr[k, i])
+
+        if q_arr is not None:
+            for i in range(n_nodes):
+                row[f"quarantine_s{i+1}"] = float(q_arr[k, i])
+
+        if risk_arr is not None:
+            row["risk"] = float(risk_arr[k])
 
         if gt_arr is not None:
             for i in range(n_nodes):
