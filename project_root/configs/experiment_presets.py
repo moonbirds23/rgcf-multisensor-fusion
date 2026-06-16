@@ -288,6 +288,19 @@ def _phase1r_me_rgcf_a0(model: ModelConfig) -> ModelConfig:
     return out
 
 
+def _phase1r_me_rgcf_a0_dir(model: ModelConfig) -> ModelConfig:
+    out = _phase1r_me_rgcf_a0(model)
+    out.model_name = "me_rgcf_a0_dir"
+    out.me_rgcf_pair_dim = 8
+    out.me_rgcf_identity_bias_init = 0.5
+    out.me_rgcf_evidence_residual_bias_init = 0.25
+    out.me_rgcf_mp_dir_loss_weight = 0.005
+    out.me_rgcf_mp_dir_identity_weight = 1.0
+    out.me_rgcf_mp_dir_evidence_weight = 0.75
+    out.fusion_variant = "ME-RGCF-A0D directional pair-aware heterogeneous P/M graph"
+    return out
+
+
 def _v3(model: ModelConfig) -> ModelConfig:
     out = _v1(model)
     out.model_name = "post_meas_window_direct_fusion"
@@ -374,6 +387,8 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         table[f"{scene_name}_rgcf_smoke"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
+        table[f"{scene_name}_me_rgcf_a0_dir"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir(model), scene_name)
+        table[f"{scene_name}_me_rgcf_a0_dir_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir(model), scene_name)
 
     if preset_name not in table:
         raise ValueError(f"Unknown preset_name: {preset_name}")

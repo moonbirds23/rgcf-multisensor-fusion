@@ -9,7 +9,7 @@ from torch.utils.data import ConcatDataset, Dataset
 from core.types import ExperimentBundle
 from .builders import FeatureBundle, build_feature_bundle_from_sim
 
-PHASE1R_TRACK_RELIABILITY_MODELS = {"phase1r_rgcf", "me_rgcf_a0"}
+PHASE1R_TRACK_RELIABILITY_MODELS = {"phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir"}
 
 
 class FusionTimeStepDataset(Dataset):
@@ -61,6 +61,12 @@ class FusionTimeStepDataset(Dataset):
                 np.asarray(feature_bundle.evidence.mask, dtype=np.float32)
             )
 
+        self._mp_pair_feat = None
+        if feature_bundle.mp_pair is not None:
+            self._mp_pair_feat = torch.from_numpy(
+                np.asarray(feature_bundle.mp_pair, dtype=np.float32)
+            )
+
     def __len__(self):
         return self._post_feat.shape[0]
 
@@ -75,6 +81,8 @@ class FusionTimeStepDataset(Dataset):
         if self._evidence_feat is not None:
             out["evidence_feat"] = self._evidence_feat[idx]
             out["evidence_mask"] = self._evidence_mask[idx]
+        if self._mp_pair_feat is not None:
+            out["mp_pair_feat"] = self._mp_pair_feat[idx]
         if self._gate_target is not None:
             out["gate_target"] = self._gate_target[idx]
             out["gate_supervision_mask"] = self._gate_supervision_mask[idx]

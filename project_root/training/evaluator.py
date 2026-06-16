@@ -48,13 +48,17 @@ def evaluate_loader(
                 evidence_feat = batch["evidence_feat"].to(device, non_blocking=True)
                 evidence_mask = batch["evidence_mask"].to(device, non_blocking=True)
 
+            mp_pair_feat = None
+            if "mp_pair_feat" in batch:
+                mp_pair_feat = batch["mp_pair_feat"].to(device, non_blocking=True)
+
             post_win = None
             meas_win = None
             if "post_win" in batch:
                 post_win = batch["post_win"].to(device, non_blocking=True)
                 meas_win = batch["meas_win"].to(device, non_blocking=True)
 
-            out = model(
+            model_kwargs = dict(
                 post_feat=post_feat,
                 mask=mask,
                 meas_feat=meas_feat,
@@ -64,6 +68,9 @@ def evaluate_loader(
                 post_win=post_win,
                 meas_win=meas_win,
             )
+            if mp_pair_feat is not None:
+                model_kwargs["mp_pair_feat"] = mp_pair_feat
+            out = model(**model_kwargs)
             pred = out.pred
 
             loss, info = compute_fusion_loss(pred, target, vel_weight=vel_weight)
@@ -143,6 +150,7 @@ def evaluate_single_sim_fusion_with_timeseries(
     cov_scale_all: List[np.ndarray] = []
     mp_attn_all: List[np.ndarray] = []
     mm_attn_all: List[np.ndarray] = []
+    mp_pair_all: List[np.ndarray] = []
     cap_all: List[np.ndarray] = []
     quarantine_all: List[np.ndarray] = []
     risk_all: List[np.ndarray] = []
@@ -168,13 +176,17 @@ def evaluate_single_sim_fusion_with_timeseries(
                 evidence_feat = batch["evidence_feat"].to(device, non_blocking=True)
                 evidence_mask = batch["evidence_mask"].to(device, non_blocking=True)
 
+            mp_pair_feat = None
+            if "mp_pair_feat" in batch:
+                mp_pair_feat = batch["mp_pair_feat"].to(device, non_blocking=True)
+
             post_win = None
             meas_win = None
             if "post_win" in batch:
                 post_win = batch["post_win"].to(device, non_blocking=True)
                 meas_win = batch["meas_win"].to(device, non_blocking=True)
 
-            out = model(
+            model_kwargs = dict(
                 post_feat=post_feat,
                 mask=mask,
                 meas_feat=meas_feat,
@@ -184,6 +196,9 @@ def evaluate_single_sim_fusion_with_timeseries(
                 post_win=post_win,
                 meas_win=meas_win,
             )
+            if mp_pair_feat is not None:
+                model_kwargs["mp_pair_feat"] = mp_pair_feat
+            out = model(**model_kwargs)
 
             pred = out.pred.detach().cpu().numpy()
             y = target.detach().cpu().numpy()
@@ -226,6 +241,8 @@ def evaluate_single_sim_fusion_with_timeseries(
                 gate_target_all.append(batch["gate_target"].cpu().numpy())
             if "gate_supervision_mask" in batch:
                 gate_mask_all.append(batch["gate_supervision_mask"].cpu().numpy())
+            if "mp_pair_feat" in batch:
+                mp_pair_all.append(batch["mp_pair_feat"].cpu().numpy())
 
             valid_all.append(batch["mask"].cpu().numpy())
 
@@ -289,6 +306,31 @@ def evaluate_single_sim_fusion_with_timeseries(
         for i in range(mp_arr.shape[1]):
             for j in range(mp_arr.shape[2]):
                 out_dict[f"mean_mp_attn_p{i+1}_m{j+1}"] = float(np.mean(mp_arr[:, i, j]))
+        entropy = -np.sum(mp_arr * np.log(np.clip(mp_arr, 1e-12, 1.0)), axis=2)
+        row_std = np.std(mp_arr, axis=1)
+        out_dict["mean_mp_attn_entropy"] = float(np.mean(entropy))
+        out_dict["mean_mp_attn_row_std"] = float(np.mean(row_std))
+        out_dict["p95_mp_attn_row_std"] = float(np.percentile(row_std, 95))
+        if mp_arr.shape[2] >= 5:
+            out_dict["mean_mp_attn_evidence_mass"] = float(np.mean(mp_arr[:, :, 3:5].sum(axis=2)))
+            own_vals = []
+            for i in range(min(3, mp_arr.shape[1], mp_arr.shape[2])):
+                own_vals.append(mp_arr[:, i, i])
+            if own_vals:
+                out_dict["mean_mp_attn_own_track_mass"] = float(np.mean(np.stack(own_vals, axis=1)))
+
+    pair_arr = None
+    if len(mp_pair_all) > 0:
+        pair_arr = np.concatenate(mp_pair_all, axis=0)
+        if mp_arr is not None and pair_arr.shape[:3] == mp_arr.shape:
+            evidence = pair_arr[..., 2] > 0.5
+            if np.any(evidence):
+                residual_rank = pair_arr[..., 5][evidence]
+                attn_ev = mp_arr[evidence]
+                if residual_rank.size > 1 and float(np.std(residual_rank)) > 1e-12 and float(np.std(attn_ev)) > 1e-12:
+                    out_dict["mean_mp_attn_residual_corr"] = float(np.corrcoef(residual_rank, attn_ev)[0, 1])
+                else:
+                    out_dict["mean_mp_attn_residual_corr"] = 0.0
 
     mm_arr = None
     if len(mm_attn_all) > 0:
@@ -567,6 +609,13 @@ def evaluate_single_sim_fusion_with_timeseries(
             for i in range(mm_arr.shape[1]):
                 for j in range(mm_arr.shape[2]):
                     row[f"mm_attn_m{i+1}_m{j+1}"] = float(mm_arr[k, i, j])
+
+        if pair_arr is not None:
+            for i in range(pair_arr.shape[1]):
+                for j in range(pair_arr.shape[2]):
+                    if pair_arr[k, i, j, 2] > 0.5:
+                        row[f"mp_pair_res_p{i+1}_m{j+1}"] = float(pair_arr[k, i, j, 3])
+                        row[f"mp_pair_rank_p{i+1}_m{j+1}"] = float(pair_arr[k, i, j, 5])
 
         if cap_arr is not None:
             for i in range(n_nodes):

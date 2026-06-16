@@ -45,6 +45,8 @@ def compute_fusion_loss_with_gate(
     quarantine: torch.Tensor | None = None,
     weight_cap: torch.Tensor | None = None,
     fused_cov_diag: torch.Tensor | None = None,
+    mp_attn: torch.Tensor | None = None,
+    mp_pair_feat: torch.Tensor | None = None,
     vel_weight: float = 0.2,
     gate_weight: float = 0.05,
     gate_prior_weight: float = 0.005,
@@ -63,6 +65,9 @@ def compute_fusion_loss_with_gate(
     fused_nll_weight: float = 0.0,
     tail_loss_weight: float = 0.0,
     tail_error_scale: float = 25.0,
+    mp_dir_loss_weight: float = 0.0,
+    mp_dir_identity_weight: float = 1.0,
+    mp_dir_evidence_weight: float = 0.75,
     balanced_gate_loss: bool = True,
     fault_gate_threshold: float = 0.5,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -211,6 +216,30 @@ def compute_fusion_loss_with_gate(
         tail = F.relu(pos_err - scale)
         tail_loss = (tail * tail).mean()
 
+    mp_dir_loss = pred.new_tensor(0.0)
+    mean_mp_attn_entropy = pred.new_tensor(0.0)
+    mean_mp_attn_row_std = pred.new_tensor(0.0)
+    if (
+        mp_attn is not None
+        and mp_pair_feat is not None
+        and float(mp_dir_loss_weight) > 0.0
+    ):
+        pair = mp_pair_feat.to(device=mp_attn.device, dtype=mp_attn.dtype)
+        valid_m = pair[..., 7].clamp(0.0, 1.0)
+        valid_p = pair[..., 6].clamp(0.0, 1.0)
+        target_logits = (
+            float(mp_dir_identity_weight) * pair[..., 0]
+            + float(mp_dir_evidence_weight) * pair[..., 2] * pair[..., 5]
+        )
+        target_logits = target_logits + (valid_m - 1.0) * 1e9
+        target_attn = torch.softmax(target_logits, dim=-1).detach()
+        attn = mp_attn.clamp_min(1e-8)
+        kl = target_attn * (torch.log(target_attn.clamp_min(1e-8)) - torch.log(attn))
+        denom = valid_p[..., 0].sum().clamp_min(1.0)
+        mp_dir_loss = (kl.sum(dim=-1) * valid_p[..., 0]).sum() / denom
+        mean_mp_attn_entropy = (-(attn * torch.log(attn)).sum(dim=-1) * valid_p[..., 0]).sum() / denom
+        mean_mp_attn_row_std = mp_attn.std(dim=1).mean()
+
     total = (
         track_loss
         + gate_weight * gate_loss
@@ -225,6 +254,7 @@ def compute_fusion_loss_with_gate(
         + cap_loss_weight * cap_loss
         + fused_nll_weight * fused_nll_loss
         + tail_loss_weight * tail_loss
+        + mp_dir_loss_weight * mp_dir_loss
     )
 
     # Batch all .item() calls (no redundant .cpu() calls)
@@ -254,6 +284,9 @@ def compute_fusion_loss_with_gate(
         "mean_weight_cap": mean_weight_cap.detach().item(),
         "loss_fused_nll": fused_nll_loss.detach().item(),
         "loss_tail": tail_loss.detach().item(),
+        "loss_mp_dir": mp_dir_loss.detach().item(),
+        "mean_mp_attn_entropy": mean_mp_attn_entropy.detach().item(),
+        "mean_mp_attn_row_std": mean_mp_attn_row_std.detach().item(),
     })
 
     return total, info

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.types import ExperimentBundle
-from .gnn_fusion import MeasurementEvaluatedRGCFA0, OriginalGNNFusion, Phase1RRGCF, PostMeasDirectFusion, PostMeasSoftGateFusion, PostMeasWindowDirectFusion, SkepticalNeuralFusionA
+from .gnn_fusion import MeasurementEvaluatedRGCFA0, MeasurementEvaluatedRGCFA0Directional, OriginalGNNFusion, Phase1RRGCF, PostMeasDirectFusion, PostMeasSoftGateFusion, PostMeasWindowDirectFusion, SkepticalNeuralFusionA
 
 
 def build_model_from_bundle(bundle: ExperimentBundle):
@@ -90,6 +90,28 @@ def build_model_from_bundle(bundle: ExperimentBundle):
             cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.35)),
             use_mm_attention=bool(getattr(bundle.model, "me_rgcf_use_mm_attention", True)),
             use_mp_attention=bool(getattr(bundle.model, "me_rgcf_use_mp_attention", True)),
+            **common,
+        )
+    if name == "me_rgcf_a0_dir":
+        return MeasurementEvaluatedRGCFA0Directional(
+            post_in_dim=int(bundle.model.post_in_dim),
+            meas_in_dim=int(getattr(bundle.model, "me_rgcf_m_in_dim", bundle.model.meas_in_dim)),
+            evidence_in_dim=int(getattr(bundle.model, "evidence_in_dim", 16)),
+            pair_dim=int(getattr(bundle.model, "me_rgcf_pair_dim", 8)),
+            meas_hidden_dim=int(bundle.model.meas_hidden_dim),
+            gate_hidden_dim=int(bundle.model.gate_hidden_dim),
+            gate_init_bias=float(bundle.model.gate_init_bias),
+            gate_weight_alpha=float(bundle.model.gate_weight_alpha),
+            gate_eps=float(bundle.model.gate_eps),
+            base_logit_temperature=float(getattr(bundle.model, "base_logit_temperature", 1.5)),
+            weight_uniform_mix=float(getattr(bundle.model, "weight_uniform_mix", 0.02)),
+            cov_calib_min_scale=float(bundle.model.cov_calib_min_scale),
+            cov_calib_max_scale=float(bundle.model.cov_calib_max_scale),
+            cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.35)),
+            use_mm_attention=bool(getattr(bundle.model, "me_rgcf_use_mm_attention", True)),
+            use_mp_attention=bool(getattr(bundle.model, "me_rgcf_use_mp_attention", True)),
+            identity_bias_init=float(getattr(bundle.model, "me_rgcf_identity_bias_init", 0.5)),
+            evidence_residual_bias_init=float(getattr(bundle.model, "me_rgcf_evidence_residual_bias_init", 0.25)),
             **common,
         )
     if name == "post_meas_window_direct_fusion":

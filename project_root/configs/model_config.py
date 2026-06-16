@@ -15,9 +15,15 @@ class ModelConfig:
     meas_in_dim: int = 18
     evidence_in_dim: int = 16
     me_rgcf_m_in_dim: int = 18
+    me_rgcf_pair_dim: int = 8
     me_rgcf_use_mm_attention: bool = True
     me_rgcf_use_mp_attention: bool = True
     me_rgcf_use_time_memory: bool = False
+    me_rgcf_identity_bias_init: float = 0.5
+    me_rgcf_evidence_residual_bias_init: float = 0.25
+    me_rgcf_mp_dir_loss_weight: float = 0.0
+    me_rgcf_mp_dir_identity_weight: float = 1.0
+    me_rgcf_mp_dir_evidence_weight: float = 0.75
     hidden_dim: int = 64
     meas_hidden_dim: int = 64
     gate_hidden_dim: int = 64

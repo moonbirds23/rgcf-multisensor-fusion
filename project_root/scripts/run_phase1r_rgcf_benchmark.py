@@ -41,6 +41,7 @@ class LearnedMethodSpec:
 LEARNED_METHOD_SPECS = {
     "rgcf": LearnedMethodSpec("rgcf", "RGCF", "RGCF", "rgcf", "phase1r_rgcf"),
     "me-a0": LearnedMethodSpec("me-a0", "ME-RGCF-A0", "ME_RGCF_A0", "me_rgcf_a0", "me_rgcf_a0"),
+    "me-a0-dir": LearnedMethodSpec("me-a0-dir", "ME-RGCF-A0D", "ME_RGCF_A0D", "me_rgcf_a0_dir", "me_rgcf_a0_dir"),
 }
 LEARNED_METHODS = [LEARNED_METHOD_SPECS["rgcf"].display_name]
 
@@ -98,6 +99,8 @@ def parse_methods(text: str | None) -> List[LearnedMethodSpec]:
             continue
         if key == "me_a0":
             key = "me-a0"
+        if key in {"me_a0_dir", "me-a0d", "me_a0d"}:
+            key = "me-a0-dir"
         if key not in LEARNED_METHOD_SPECS:
             allowed = ", ".join(sorted(LEARNED_METHOD_SPECS))
             raise ValueError(f"Unknown --methods entry '{part}'. Allowed: {allowed}")
@@ -528,8 +531,11 @@ def evaluate_learned(
     device = torch.device(bundle.base.runtime.device)
     errors: List[float] = []
     detail_rows: List[Dict] = []
+    summary_rows: List[Dict] = []
     for sim in test_sims:
         ev = evaluate_single_sim_fusion_with_timeseries(sim, model, bundle, device)
+        if isinstance(ev.get("summary"), dict):
+            summary_rows.append(ev["summary"])
         seed = sim.get("seed")
         for row in ev["timeseries"]:
             err = float(row["error_pos"])
@@ -550,12 +556,26 @@ def evaluate_learned(
                     or key.startswith("g_s")
                     or key.startswith("mp_attn_p")
                     or key.startswith("mm_attn_m")
+                    or key.startswith("mp_pair_res_p")
+                    or key.startswith("mp_pair_rank_p")
                 ):
                     out_row[key] = value
             detail_rows.append(out_row)
     safe_label = run_label.replace("\\", "_").replace("/", "_").replace(":", "_")
     save_rows(detail_rows, out_dir / "eval_details" / f"{safe_label}_errors.csv")
     out = metric_summary(errors)
+    diag_keys = (
+        "mean_mp_attn_entropy",
+        "mean_mp_attn_row_std",
+        "p95_mp_attn_row_std",
+        "mean_mp_attn_evidence_mass",
+        "mean_mp_attn_own_track_mass",
+        "mean_mp_attn_residual_corr",
+    )
+    for key in diag_keys:
+        vals = [float(row[key]) for row in summary_rows if key in row and math.isfinite(float(row[key]))]
+        if vals:
+            out[key] = float(np.mean(vals))
     out["num_sims"] = len(test_sims)
     return out
 
@@ -694,7 +714,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run Phase1R RGCF corrected GPU benchmark.")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--smoke", action="store_true")
-    p.add_argument("--methods", default="rgcf", help="Learned methods to run: rgcf, me-a0, or rgcf,me-a0. Rule baselines always run.")
+    p.add_argument("--methods", default="rgcf", help="Learned methods to run: rgcf, me-a0, me-a0-dir, or a comma-separated list. Rule baselines always run.")
     p.add_argument("--out-dir", default=str(PROJECT_ROOT / "results" / "phase1r_rgcf_compare"))
     p.add_argument("--dataset-store-root", default=str(PROJECT_ROOT / "dataset_store"))
     p.add_argument("--scenario-presets", default=None)

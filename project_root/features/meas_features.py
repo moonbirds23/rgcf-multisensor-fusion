@@ -169,3 +169,56 @@ def build_evidence_node_features_from_sim(sim: Dict[str, np.ndarray], bundle: Ex
             node[ti, i, 15] = float(i + 1) / max(float(e), 1.0)
     node[valid <= 0.5, :] = 0.0
     return EvidenceFeatureOutput(node, valid.copy(), np.asarray(sim["t"], dtype=np.float32), {"feature_dim": feature_dim})
+
+
+def build_mp_pair_features_from_sim(sim: Dict[str, np.ndarray], bundle: ExperimentBundle) -> np.ndarray:
+    track_valid = np.asarray(sim.get("track_valid_mask", sim["valid_mask"]), dtype=np.float32)
+    k, p = track_valid.shape
+    p = min(3, p)
+    evidence_valid = np.asarray(sim.get("evidence_valid_mask", np.ones((k, 2), dtype=np.float32)), dtype=np.float32)
+    e_count = min(2, evidence_valid.shape[1])
+    m_count = p + e_count
+    pair_dim = int(getattr(bundle.model, "me_rgcf_pair_dim", 8))
+    if pair_dim != 8:
+        raise ValueError(f"ME-RGCF directional pair features require me_rgcf_pair_dim=8, got {pair_dim}")
+
+    feat = np.zeros((k, p, m_count, pair_dim), dtype=np.float32)
+    for pi in range(p):
+        for mi in range(m_count):
+            is_track = mi < p
+            feat[:, pi, mi, 0] = 1.0 if is_track and mi == pi else 0.0
+            feat[:, pi, mi, 1] = 1.0 if is_track and mi != pi else 0.0
+            feat[:, pi, mi, 2] = 1.0 if not is_track else 0.0
+            feat[:, pi, mi, 6] = track_valid[:, pi]
+            if is_track:
+                feat[:, pi, mi, 7] = track_valid[:, mi]
+            else:
+                ev_i = mi - p
+                feat[:, pi, mi, 7] = evidence_valid[:, ev_i] if ev_i < e_count else 0.0
+
+    residual = sim.get("evidence_residual_to_track", None)
+    if residual is None:
+        return feat
+
+    residual = np.asarray(residual, dtype=np.float64)
+    if residual.ndim != 3 or residual.shape[2] < p:
+        return feat
+
+    for ev_i in range(min(e_count, residual.shape[1])):
+        mi = p + ev_i
+        res = residual[:, ev_i, :p]
+        finite = np.isfinite(res)
+        res_clean = np.where(finite, np.clip(res, 0.0, None), 0.0)
+        log_res = np.log1p(res_clean).astype(np.float32)
+        mean_log = np.mean(log_res, axis=1, keepdims=True)
+        centered = np.clip(log_res - mean_log, -3.0, 3.0) / 3.0
+        order = np.argsort(log_res, axis=1)
+        ranks = np.zeros_like(log_res, dtype=np.float32)
+        denom = max(float(p - 1), 1.0)
+        for ri in range(p):
+            ranks[np.arange(k), order[:, ri]] = float(ri) / denom
+        for pi in range(p):
+            feat[:, pi, mi, 3] = log_res[:, pi]
+            feat[:, pi, mi, 4] = centered[:, pi]
+            feat[:, pi, mi, 5] = ranks[:, pi]
+    return feat

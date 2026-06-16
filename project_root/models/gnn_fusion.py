@@ -626,7 +626,7 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
         h1 = upd(torch.cat([h0, torch.matmul(a, h0)], -1))
         return h1, a
 
-    def _cross_measurement_to_posterior(self, h_p: torch.Tensor, h_m: torch.Tensor, m_mask: torch.Tensor | None):
+    def _cross_measurement_to_posterior(self, h_p: torch.Tensor, h_m: torch.Tensor, m_mask: torch.Tensor | None, mp_pair_feat: torch.Tensor | None = None):
         if m_mask is None:
             m_mask = torch.ones(h_m.shape[:-1], device=h_m.device, dtype=h_m.dtype)
         if h_p.dim() == 2:
@@ -648,7 +648,7 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
         ctx = torch.matmul(a, h_m)
         return self.mp_upd(torch.cat([h_p, ctx], -1)), a
 
-    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None, mp_pair_feat=None):
         h_p = self.post_enc(post_feat) + self.p_type_embedding
         h_m, m_mask = self._measurement_nodes(meas_feat, evidence_feat, evidence_mask, post_feat)
 
@@ -658,7 +658,7 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
             mm_a = h_m.new_zeros((*h_m.shape[:-1], h_m.shape[-2]))
 
         if self.use_mp_attention:
-            h_p0, mp_a = self._cross_measurement_to_posterior(h_p, h_m, m_mask)
+            h_p0, mp_a = self._cross_measurement_to_posterior(h_p, h_m, m_mask, mp_pair_feat=mp_pair_feat)
         else:
             h_p0 = h_p
             if h_p.dim() == 3:
@@ -705,6 +705,138 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
             cov_scale=cov_scale,
             weight_uniform_mix=self.weight_uniform_mix,
         )
+
+
+class MeasurementEvaluatedRGCFA0Directional(MeasurementEvaluatedRGCFA0):
+    """ME-A0D: pair-aware M->P attention using per-track evidence residuals."""
+
+    def __init__(
+        self,
+        post_in_dim=9,
+        meas_in_dim=18,
+        evidence_in_dim=16,
+        pair_dim=8,
+        hidden_dim=64,
+        meas_hidden_dim=64,
+        gate_hidden_dim=64,
+        valid_idx=8,
+        pos_scale=1000.0,
+        vel_scale=30.0,
+        gate_init_bias=0.5,
+        gate_weight_alpha=1.0,
+        gate_eps=1e-4,
+        base_logit_temperature=1.5,
+        weight_uniform_mix=0.02,
+        cov_calib_min_scale=1.0,
+        cov_calib_max_scale=25.0,
+        cov_weight_beta=0.35,
+        use_mm_attention=True,
+        use_mp_attention=True,
+        identity_bias_init=0.5,
+        evidence_residual_bias_init=0.25,
+        output_fusion_mode="info_diag",
+    ):
+        super().__init__(
+            post_in_dim=post_in_dim,
+            meas_in_dim=meas_in_dim,
+            evidence_in_dim=evidence_in_dim,
+            hidden_dim=hidden_dim,
+            meas_hidden_dim=meas_hidden_dim,
+            gate_hidden_dim=gate_hidden_dim,
+            valid_idx=valid_idx,
+            pos_scale=pos_scale,
+            vel_scale=vel_scale,
+            gate_init_bias=gate_init_bias,
+            gate_weight_alpha=gate_weight_alpha,
+            gate_eps=gate_eps,
+            base_logit_temperature=base_logit_temperature,
+            weight_uniform_mix=weight_uniform_mix,
+            cov_calib_min_scale=cov_calib_min_scale,
+            cov_calib_max_scale=cov_calib_max_scale,
+            cov_weight_beta=cov_weight_beta,
+            use_mm_attention=use_mm_attention,
+            use_mp_attention=use_mp_attention,
+            output_fusion_mode=output_fusion_mode,
+        )
+        self.pair_dim = int(pair_dim)
+        self.pair_enc = nn.Sequential(nn.Linear(self.pair_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.mp_attn = nn.Sequential(nn.Linear(3 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.mp_msg = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.mp_upd = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.identity_bias = nn.Parameter(torch.tensor(float(identity_bias_init)))
+        self.evidence_residual_bias = nn.Parameter(torch.tensor(float(evidence_residual_bias_init)))
+
+    def _default_pair_feat(self, h_p: torch.Tensor, h_m: torch.Tensor) -> torch.Tensor:
+        if h_p.dim() == 2:
+            p = h_p.shape[0]
+            m = h_m.shape[0]
+            out = h_p.new_zeros((p, m, self.pair_dim))
+            for pi in range(min(p, m, 3)):
+                out[pi, pi, 0] = 1.0
+            if m > 3:
+                out[:, 3:, 2] = 1.0
+            out[..., 6:8] = 1.0
+            return out
+        b, p, _ = h_p.shape
+        m = h_m.shape[1]
+        out = h_p.new_zeros((b, p, m, self.pair_dim))
+        for pi in range(min(p, m, 3)):
+            out[:, pi, pi, 0] = 1.0
+        if m > 3:
+            out[:, :, 3:, 2] = 1.0
+        out[..., 6:8] = 1.0
+        return out
+
+    def _cross_measurement_to_posterior(self, h_p: torch.Tensor, h_m: torch.Tensor, m_mask: torch.Tensor | None, mp_pair_feat: torch.Tensor | None = None):
+        if m_mask is None:
+            m_mask = torch.ones(h_m.shape[:-1], device=h_m.device, dtype=h_m.dtype)
+        if mp_pair_feat is None:
+            mp_pair_feat = self._default_pair_feat(h_p, h_m)
+        mp_pair_feat = mp_pair_feat.to(device=h_p.device, dtype=h_p.dtype)
+
+        if h_p.dim() == 2:
+            p, m = h_p.shape[0], h_m.shape[0]
+            hp = h_p.unsqueeze(1).expand(p, m, -1)
+            hm = h_m.unsqueeze(0).expand(p, m, -1)
+            pair_h = self.pair_enc(mp_pair_feat)
+            e = self.mp_attn(torch.cat([hp, hm, pair_h], -1)).squeeze(-1)
+            e = e + self.identity_bias * mp_pair_feat[..., 0]
+            e = e + self.evidence_residual_bias * mp_pair_feat[..., 2] * mp_pair_feat[..., 5]
+            e = e + (m_mask.unsqueeze(0) - 1.0) * 1e9
+            a = torch.softmax(e, dim=1)
+            msg = self.mp_msg(torch.cat([hm, pair_h], -1))
+            ctx = (a.unsqueeze(-1) * msg).sum(dim=1)
+            return self.mp_upd(torch.cat([h_p, ctx], -1)), a
+
+        b, p, _ = h_p.shape
+        m = h_m.shape[1]
+        hp = h_p.unsqueeze(2).expand(b, p, m, -1)
+        hm = h_m.unsqueeze(1).expand(b, p, m, -1)
+        pair_h = self.pair_enc(mp_pair_feat)
+        e = self.mp_attn(torch.cat([hp, hm, pair_h], -1)).squeeze(-1)
+        e = e + self.identity_bias * mp_pair_feat[..., 0]
+        e = e + self.evidence_residual_bias * mp_pair_feat[..., 2] * mp_pair_feat[..., 5]
+        e = e + (m_mask.unsqueeze(1) - 1.0) * 1e9
+        a = torch.softmax(e, dim=2)
+        msg = self.mp_msg(torch.cat([hm, pair_h], -1))
+        ctx = (a.unsqueeze(-1) * msg).sum(dim=2)
+        return self.mp_upd(torch.cat([h_p, ctx], -1)), a
+
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None, mp_pair_feat=None):
+        out = super().forward(
+            post_feat=post_feat,
+            mask=mask,
+            meas_feat=meas_feat,
+            return_weights=return_weights,
+            post_win=post_win,
+            meas_win=meas_win,
+            evidence_feat=evidence_feat,
+            evidence_mask=evidence_mask,
+            mp_pair_feat=mp_pair_feat,
+        )
+        if return_weights and mp_pair_feat is not None:
+            out.aux["mp_pair_feat"] = mp_pair_feat
+        return out
 
 
 class PostMeasWindowDirectFusion(PostMeasDirectFusion):
