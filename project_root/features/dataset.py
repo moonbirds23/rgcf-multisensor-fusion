@@ -9,6 +9,8 @@ from torch.utils.data import ConcatDataset, Dataset
 from core.types import ExperimentBundle
 from .builders import FeatureBundle, build_feature_bundle_from_sim
 
+PHASE1R_TRACK_RELIABILITY_MODELS = {"phase1r_rgcf", "me_rgcf_a0"}
+
 
 class FusionTimeStepDataset(Dataset):
     """Per-timestep fusion dataset with pre-converted GPU-friendly tensors.
@@ -115,7 +117,7 @@ def _gate_arrays(sim: Dict[str, np.ndarray], feat: FeatureBundle, bundle: Experi
     if not bool(getattr(bundle.model, "use_gate_supervision", False)):
         return None, None
     valid = np.asarray(feat.post.mask, dtype=np.float32)
-    if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf":
+    if str(getattr(bundle.model, "model_name", "")) in PHASE1R_TRACK_RELIABILITY_MODELS:
         xhat = np.asarray(sim.get("track_xhat", sim.get("xhat")), dtype=np.float32)
         truth = np.asarray(sim.get("x_truth_4d"), dtype=np.float32)
         pos_err = np.linalg.norm(xhat[..., :2] - truth[:, None, :2], axis=-1)

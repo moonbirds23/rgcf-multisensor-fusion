@@ -1,5 +1,44 @@
 # Phase1R RGCF GPU 实验计划
 
+## 0. 本次上传版执行范围（2026-06-16）
+
+本次 GitHub 上传包含两部分：
+
+1. `Phase1R RGCF` 稳定基线代码与文档入口整理。
+2. `ME-RGCF-A0` 最小异构图升级代码。
+
+GPU 端拉取后优先执行以下三步：
+
+```powershell
+cd D:\code\python\project-2
+
+& 'D:\code\python\env\env-NDKF - torch\Scripts\python.exe' project_root\scripts\run_phase1r_rgcf_benchmark.py --dry-run --methods rgcf,me-a0 --out-dir project_root\results\phase2_me_a0_dryrun
+
+& 'D:\code\python\env\env-NDKF - torch\Scripts\python.exe' project_root\scripts\run_phase1r_rgcf_benchmark.py --smoke --device cuda --methods me-a0 --out-dir project_root\results\phase2_me_a0_smoke_cuda
+
+& 'D:\code\python\env\env-NDKF - torch\Scripts\python.exe' project_root\scripts\run_phase1r_rgcf_benchmark.py --device cuda --resume --methods rgcf,me-a0 --out-dir project_root\results\phase2_me_a0_compare
+```
+
+当前方法范围：
+
+- 默认 learned baseline：`RGCF`
+- 本次升级方法：`ME-RGCF-A0`
+- 规则 baseline：`single-T1/T2/T3`、`AVG-3T`、`WAA-MM-3T`、`CI-3T`
+
+当前不进入默认对比：
+
+- P0/P1/P11/P12 旧版本树
+- SNF-A 旧构想
+- M4/RGCF-V5 peer-consistency 消融树
+- 含污染或故障场景
+
+关键验收：
+
+- `T1/T2/T3` 单独 EKF 不出现数量级崩溃。
+- `E1/E2` 不出现在最终 state fusion weights 中。
+- `ME-RGCF-A0` 的 `eval_details` 正常落盘 `mp_attn_p*_m*` 与 `mm_attn_m*_m*`。
+- `ME-RGCF-A0` 在 S1R/S2R 上不明显退化于 RGCF。
+
 ## 1. 实验目的
 
 本次实验从 Phase1R 重新出发，验证纠正后的 RGCF 信息流是否能够在无污染条件下完成多传感器融合任务。核心纠正点是：不再把无法独立完成 EKF 跟踪的 AOA/UWB 量测源作为后验融合节点，而是将传感器明确拆成 3 个后验跟踪传感器与 2 个量测证据传感器。
@@ -192,9 +231,11 @@ CPU smoke 结果：
 
 该 smoke 只验证闭环，不作为正式论文或汇报指标。
 
-## 9. 第二阶段设计方向
+## 9. 第二阶段 ME-A0 升级状态
 
-当前 GPU 主实验仍以本文档中的 `Phase1R RGCF` 为准。第二阶段可在 Phase1R 正式结果稳定后推进 `ME-RGCF`，详见：
+当前 GPU 主实验仍以本文档中的 `Phase1R RGCF` 为稳定 baseline。第二阶段的
+最小异构图版本 `ME-RGCF-A0` 已经实现为可选方法，但不会替换默认 RGCF。
+详见：
 
 `project_root/docs/ME_RGCF_HETEROGENEOUS_TEMPORAL_DESIGN_CN.md`
 
@@ -207,6 +248,7 @@ CPU smoke 结果：
 
 第二阶段不改变当前验收标准：
 
-- 当前默认 benchmark 不运行 ME-RGCF。
-- 当前默认结果表仍只比较 `single-T1/T2/T3`、`AVG-3T`、`WAA-MM-3T`、`CI-3T` 和 `RGCF`。
-- ME-RGCF 只作为 Phase2 消融与创新模型，在 Phase1R baseline 稳定后单独实现和评估。
+- 默认 benchmark 仍只运行 RGCF。
+- 需要显式传入 `--methods me-a0` 或 `--methods rgcf,me-a0` 才运行 ME-RGCF-A0。
+- 当前结果表默认比较 `single-T1/T2/T3`、`AVG-3T`、`WAA-MM-3T`、`CI-3T` 和 `RGCF`。
+- ME-RGCF-A0 只作为 Phase2 最小异构图消融与创新模型，不引入时间记忆、污染或 `delta_x`。

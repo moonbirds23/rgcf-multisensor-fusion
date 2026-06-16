@@ -490,13 +490,15 @@ def train_fusion_model(
                 model = torch.compile(model, mode=_mode)
                 # Eagerly trigger compilation on a dummy batch to catch
                 # lazy compilation errors (e.g. TritonMissing) early.
-                dummy_nodes = 3 if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf" else 4
+                phase1r_models = {"phase1r_rgcf", "me_rgcf_a0"}
+                is_phase1r_model = str(getattr(bundle.model, "model_name", "")) in phase1r_models
+                dummy_nodes = 3 if is_phase1r_model else 4
                 _dummy_post = torch.randn(1, dummy_nodes, int(bundle.model.post_in_dim), device=device)
                 _dummy_mask = torch.ones(1, dummy_nodes, device=device)
                 _dummy_meas = torch.randn(1, dummy_nodes, int(bundle.model.meas_in_dim), device=device)
                 _dummy_evidence = None
                 _dummy_evidence_mask = None
-                if str(getattr(bundle.model, "model_name", "")) == "phase1r_rgcf":
+                if is_phase1r_model:
                     _dummy_evidence = torch.randn(1, 2, int(getattr(bundle.model, "evidence_in_dim", 16)), device=device)
                     _dummy_evidence_mask = torch.ones(1, 2, device=device)
                 _ = model(

@@ -1,37 +1,76 @@
-# NF-DKF / RGCF Multi-Sensor Fusion Experiments
+# NF-DKF Multi-Sensor Fusion Experiments
 
-This is the cleaned GitHub-ready snapshot of the NF-DKF / RGCF multi-sensor fusion project.
+This repository contains executable NF-DKF multi-sensor fusion experiments.
+Active code lives in `project_root/`.
 
-Active code lives in `project_root/`. The current main line is **V2-RGCF: Reliability-Guided Calibrated Fusion**.
+## Current Main Line
 
-2026-06-09 update: the current paper/code story is being reorganized around a
-three-layer evaluation framework rather than a fixed M4/Px version line. Start
-from:
+Updated: 2026-06-16
+
+The current executable main line is:
 
 ```text
-project_root/EXPERIMENT_REDESIGN_CURRENT_CN.md
+Phase1R RGCF baseline + ME-RGCF-A0 optional heterogeneous graph upgrade
 ```
 
-Historical M4 and P0-P12 ablation documents are retained as diagnostic records,
-not as the current default paper plan.
-
-Start with:
+Start here:
 
 ```text
-project_root/EXPERIMENT_REDESIGN_CURRENT_CN.md
-WEB_HANDOFF_PROJECT_ANALYSIS_CN.md
-GITHUB_UPLOAD_MANIFEST_CN.md
-project_root/main.py
-project_root/configs/experiment_presets.py
+project_root/docs/CURRENT_MAINLINE_CN.md
+project_root/docs/PHASE1R_RGCF_GPU_EXPERIMENT_PLAN_CN.md
+project_root/docs/ME_RGCF_HETEROGENEOUS_TEMPORAL_DESIGN_CN.md
+```
+
+Current defaults:
+
+- `Phase1RRGCF` remains the stable baseline and default learned method.
+- `ME-RGCF-A0` is the current upgrade, enabled only with `--methods me-a0` or `--methods rgcf,me-a0`.
+- Clean scenarios only: `S1R` basic and `S2R` ordinary maneuver.
+- Sensor roles are fixed as `3 track posterior sensors + 2 evidence measurement sensors`.
+- Evidence sensors never output state-fusion weights.
+
+## Main Commands
+
+Dry-run:
+
+```powershell
+& 'D:\code\python\env\env-NDKF - torch\Scripts\python.exe' project_root\scripts\run_phase1r_rgcf_benchmark.py --dry-run --methods rgcf,me-a0 --out-dir project_root\results\phase2_me_a0_dryrun
+```
+
+CPU smoke for ME-A0:
+
+```powershell
+& 'D:\code\python\env\env-NDKF - torch\Scripts\python.exe' project_root\scripts\run_phase1r_rgcf_benchmark.py --smoke --device cpu --methods me-a0 --out-dir project_root\results\phase2_me_a0_smoke_cpu
+```
+
+GPU comparison:
+
+```powershell
+& 'D:\code\python\env\env-NDKF - torch\Scripts\python.exe' project_root\scripts\run_phase1r_rgcf_benchmark.py --device cuda --resume --methods rgcf,me-a0 --out-dir project_root\results\phase2_me_a0_compare
+```
+
+## Code Retention Policy
+
+Legacy P0/P1/P11/P12/SNF/M4 code is retained for reproduction and diagnosis.
+It should not be treated as the default research path unless a new task
+explicitly reactivates it.
+
+Current implementation entrypoints:
+
+```text
+project_root/scripts/run_phase1r_rgcf_benchmark.py
 project_root/models/gnn_fusion.py
+project_root/models/model_factory.py
+project_root/configs/experiment_presets.py
+project_root/features/
+project_root/training/
 ```
 
-Large raw datasets, simulation caches, local archives, and model checkpoints are excluded by `.gitignore`.
+Archived design notes are under:
 
-## Development Workflow (双机协作约定)
+```text
+project_root/docs/_archive_design_notes/
+```
 
-- **本机（开发端）**：所有代码编写、重构、配置调整在本机完成。
-- **GPU 端（实验端）**：另一台 GPU 机器仅用于执行实验，不做代码修改。
-- **同步方式**：两台机器之间通过 `git` 进行代码同步。
-- **铁律**：每轮版本迭代或发起实验前，**必须先 commit 并 push 本机改动**，GPU 端 `git pull` 后再执行实验。禁止在未提交状态下直接运行 GPU 端实验，避免结果无法追溯对应代码版本。
-- **任务清单**：实验任务统一通过 `project_root/task_checklists/` 文件夹交接。新任务写入 `project_root/task_checklists/TASK_<批次名>.md`，格式参考 `project_root/task_checklists/TASK_CHECKLIST_TEMPLATE.md`。GPU 端按清单顺序执行并回填结果，完成后 commit 通知开发端验收。
+Large raw datasets, simulation caches, local archives, and model checkpoints
+are excluded by `.gitignore`.

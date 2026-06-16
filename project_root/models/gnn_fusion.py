@@ -506,6 +506,207 @@ class Phase1RRGCF(_GraphFusionCore):
         )
 
 
+class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
+    """ME-A0 heterogeneous graph: P nodes fuse, M nodes evaluate evidence."""
+
+    def __init__(
+        self,
+        post_in_dim=9,
+        meas_in_dim=18,
+        evidence_in_dim=16,
+        hidden_dim=64,
+        meas_hidden_dim=64,
+        gate_hidden_dim=64,
+        valid_idx=8,
+        pos_scale=1000.0,
+        vel_scale=30.0,
+        gate_init_bias=0.5,
+        gate_weight_alpha=1.0,
+        gate_eps=1e-4,
+        base_logit_temperature=1.5,
+        weight_uniform_mix=0.02,
+        cov_calib_min_scale=1.0,
+        cov_calib_max_scale=25.0,
+        cov_weight_beta=0.35,
+        use_mm_attention=True,
+        use_mp_attention=True,
+        output_fusion_mode="info_diag",
+    ):
+        super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
+        self.meas_in_dim = int(meas_in_dim)
+        self.evidence_in_dim = int(evidence_in_dim)
+        self.gate_weight_alpha = float(gate_weight_alpha)
+        self.gate_eps = float(gate_eps)
+        self.base_logit_temperature = max(float(base_logit_temperature), 1e-6)
+        self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
+        self.cov_calib_min_scale = float(cov_calib_min_scale)
+        self.cov_calib_max_scale = float(cov_calib_max_scale)
+        self.cov_weight_beta = float(cov_weight_beta)
+        self.use_mm_attention = bool(use_mm_attention)
+        self.use_mp_attention = bool(use_mp_attention)
+
+        self.post_enc = nn.Sequential(nn.Linear(post_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.meas_enc = nn.Sequential(nn.Linear(meas_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.measurement_role_embedding = nn.Embedding(2, hidden_dim)
+        self.p_type_embedding = nn.Parameter(torch.zeros(hidden_dim))
+
+        self.mm_attn = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.mm_upd = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.mp_attn = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.mp_upd = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.pp_attn = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.pp_upd = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+
+        self.reliability_head = nn.Sequential(nn.Linear(hidden_dim, gate_hidden_dim), nn.ReLU(), nn.Linear(gate_hidden_dim, 1))
+        self.cov_calib = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        nn.init.constant_(self.reliability_head[-1].bias, float(gate_init_bias))
+
+    def _pad_evidence(self, evidence_feat: torch.Tensor | None, post_feat: torch.Tensor) -> torch.Tensor:
+        if evidence_feat is None:
+            if post_feat.dim() == 3:
+                return post_feat.new_zeros((post_feat.shape[0], 2, self.meas_in_dim))
+            return post_feat.new_zeros((2, self.meas_in_dim))
+        if evidence_feat.shape[-1] == self.meas_in_dim:
+            return evidence_feat
+        if evidence_feat.shape[-1] > self.meas_in_dim:
+            return evidence_feat[..., : self.meas_in_dim]
+        pad = self.meas_in_dim - evidence_feat.shape[-1]
+        return F.pad(evidence_feat, (0, pad))
+
+    def _measurement_nodes(self, meas_feat, evidence_feat, evidence_mask, post_feat):
+        if meas_feat is None:
+            raise ValueError("MeasurementEvaluatedRGCFA0 requires track meas_feat.")
+        ev = self._pad_evidence(evidence_feat, post_feat)
+        m_feat = torch.cat([meas_feat, ev], dim=-2)
+        if meas_feat.dim() == 3:
+            track_mask = post_feat[..., self.valid_idx].clamp_min(0.0)
+            if evidence_mask is None:
+                evidence_mask = torch.ones(ev.shape[:-1], device=ev.device, dtype=ev.dtype)
+            m_mask = torch.cat([track_mask, evidence_mask.to(track_mask.dtype)], dim=1)
+            role = torch.cat([
+                torch.zeros(meas_feat.shape[1], device=meas_feat.device, dtype=torch.long),
+                torch.ones(ev.shape[1], device=meas_feat.device, dtype=torch.long),
+            ], dim=0)
+            role_emb = self.measurement_role_embedding(role).unsqueeze(0)
+        else:
+            track_mask = post_feat[..., self.valid_idx].clamp_min(0.0)
+            if evidence_mask is None:
+                evidence_mask = torch.ones(ev.shape[:-1], device=ev.device, dtype=ev.dtype)
+            m_mask = torch.cat([track_mask, evidence_mask.to(track_mask.dtype)], dim=0)
+            role = torch.cat([
+                torch.zeros(meas_feat.shape[0], device=meas_feat.device, dtype=torch.long),
+                torch.ones(ev.shape[0], device=meas_feat.device, dtype=torch.long),
+            ], dim=0)
+            role_emb = self.measurement_role_embedding(role)
+        h_m = self.meas_enc(m_feat) + role_emb
+        return h_m, m_mask
+
+    def _masked_self_graph(self, h0: torch.Tensor, mask: torch.Tensor | None, attn, upd, remove_self=True):
+        if mask is None:
+            mask = torch.ones(h0.shape[:-1], device=h0.device, dtype=h0.dtype)
+        if h0.dim() == 2:
+            n = h0.size(0)
+            hi = h0.unsqueeze(1).expand(n, n, -1)
+            hj = h0.unsqueeze(0).expand(n, n, -1)
+            e = attn(torch.cat([hi, hj], -1)).squeeze(-1)
+            e = e + (mask.unsqueeze(0) - 1.0) * 1e9
+            if remove_self and n > 1:
+                e = e + torch.eye(n, device=h0.device, dtype=e.dtype) * (-1e9)
+            a = torch.softmax(e, dim=1)
+            h1 = upd(torch.cat([h0, a @ h0], -1))
+            return h1, a
+        b, n, _ = h0.shape
+        hi = h0.unsqueeze(2).expand(b, n, n, -1)
+        hj = h0.unsqueeze(1).expand(b, n, n, -1)
+        e = attn(torch.cat([hi, hj], -1)).squeeze(-1)
+        e = e + (mask.unsqueeze(1) - 1.0) * 1e9
+        if remove_self and n > 1:
+            e = e + torch.eye(n, device=h0.device, dtype=e.dtype).unsqueeze(0) * (-1e9)
+        a = torch.softmax(e, dim=2)
+        h1 = upd(torch.cat([h0, torch.matmul(a, h0)], -1))
+        return h1, a
+
+    def _cross_measurement_to_posterior(self, h_p: torch.Tensor, h_m: torch.Tensor, m_mask: torch.Tensor | None):
+        if m_mask is None:
+            m_mask = torch.ones(h_m.shape[:-1], device=h_m.device, dtype=h_m.dtype)
+        if h_p.dim() == 2:
+            p, m = h_p.shape[0], h_m.shape[0]
+            hp = h_p.unsqueeze(1).expand(p, m, -1)
+            hm = h_m.unsqueeze(0).expand(p, m, -1)
+            e = self.mp_attn(torch.cat([hp, hm], -1)).squeeze(-1)
+            e = e + (m_mask.unsqueeze(0) - 1.0) * 1e9
+            a = torch.softmax(e, dim=1)
+            ctx = a @ h_m
+            return self.mp_upd(torch.cat([h_p, ctx], -1)), a
+        b, p, _ = h_p.shape
+        m = h_m.shape[1]
+        hp = h_p.unsqueeze(2).expand(b, p, m, -1)
+        hm = h_m.unsqueeze(1).expand(b, p, m, -1)
+        e = self.mp_attn(torch.cat([hp, hm], -1)).squeeze(-1)
+        e = e + (m_mask.unsqueeze(1) - 1.0) * 1e9
+        a = torch.softmax(e, dim=2)
+        ctx = torch.matmul(a, h_m)
+        return self.mp_upd(torch.cat([h_p, ctx], -1)), a
+
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
+        h_p = self.post_enc(post_feat) + self.p_type_embedding
+        h_m, m_mask = self._measurement_nodes(meas_feat, evidence_feat, evidence_mask, post_feat)
+
+        if self.use_mm_attention:
+            h_m, mm_a = self._masked_self_graph(h_m, m_mask, self.mm_attn, self.mm_upd)
+        else:
+            mm_a = h_m.new_zeros((*h_m.shape[:-1], h_m.shape[-2]))
+
+        if self.use_mp_attention:
+            h_p0, mp_a = self._cross_measurement_to_posterior(h_p, h_m, m_mask)
+        else:
+            h_p0 = h_p
+            if h_p.dim() == 3:
+                mp_a = h_p.new_zeros((h_p.shape[0], h_p.shape[1], h_m.shape[1]))
+            else:
+                mp_a = h_p.new_zeros((h_p.shape[0], h_m.shape[0]))
+
+        p_mask = mask if mask is not None else post_feat[..., self.valid_idx].clamp_min(0.0)
+        h1, pp_a = self._masked_self_graph(h_p0, p_mask, self.pp_attn, self.pp_upd)
+
+        valid = post_feat[..., self.valid_idx]
+        reliability_soft = torch.sigmoid(self.reliability_head(h1).squeeze(-1))
+        reliability = reliability_soft * valid
+        cov_scale = (self.cov_calib_min_scale + F.softplus(self.cov_calib(h1).squeeze(-1))).clamp(max=self.cov_calib_max_scale)
+        base_logits = self.node_logit(h1).squeeze(-1) / self.base_logit_temperature
+        reliability_bias = self.gate_weight_alpha * torch.log(reliability.clamp_min(self.gate_eps))
+        cov_bias = -self.cov_weight_beta * torch.log(cov_scale.clamp_min(self.gate_eps))
+        reliability_logits = base_logits + reliability_bias + cov_bias
+
+        aux = {
+            "attn_matrix": pp_a,
+            "mm_attn": mm_a,
+            "mp_attn": mp_a,
+            "h_post": h_p,
+            "h_meas": h_m,
+            "measurement_mask": m_mask,
+            "gate": reliability,
+            "gate_soft": reliability_soft,
+            "reliability": reliability,
+            "base_weight_logits": base_logits,
+            "raw_weight_logits": reliability_logits,
+            "gate_weight_bias": reliability_bias,
+            "cov_weight_bias": cov_bias,
+            "reliability_logits": reliability_logits,
+            "cov_scale": cov_scale,
+        }
+        return self._decode(
+            post_feat,
+            h1,
+            mask,
+            reliability_logits,
+            return_weights,
+            aux,
+            cov_scale=cov_scale,
+            weight_uniform_mix=self.weight_uniform_mix,
+        )
+
+
 class PostMeasWindowDirectFusion(PostMeasDirectFusion):
     def __init__(self, post_in_dim=9, meas_in_dim=18, hidden_dim=64, meas_hidden_dim=64, window_size=6, valid_idx=8, pos_scale=1000.0, vel_scale=30.0, output_fusion_mode="info_diag"):
         super().__init__(post_in_dim, meas_in_dim, hidden_dim, meas_hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)

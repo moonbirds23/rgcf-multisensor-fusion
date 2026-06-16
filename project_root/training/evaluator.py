@@ -141,6 +141,8 @@ def evaluate_single_sim_fusion_with_timeseries(
     weights_all: List[np.ndarray] = []
     gates_all: List[np.ndarray] = []
     cov_scale_all: List[np.ndarray] = []
+    mp_attn_all: List[np.ndarray] = []
+    mm_attn_all: List[np.ndarray] = []
     cap_all: List[np.ndarray] = []
     quarantine_all: List[np.ndarray] = []
     risk_all: List[np.ndarray] = []
@@ -199,6 +201,14 @@ def evaluate_single_sim_fusion_with_timeseries(
             cov_scale = out.aux.get("cov_scale", None)
             if cov_scale is not None:
                 cov_scale_all.append(cov_scale.detach().cpu().numpy())
+
+            mp_attn = out.aux.get("mp_attn", None)
+            if mp_attn is not None:
+                mp_attn_all.append(mp_attn.detach().cpu().numpy())
+
+            mm_attn = out.aux.get("mm_attn", None)
+            if mm_attn is not None:
+                mm_attn_all.append(mm_attn.detach().cpu().numpy())
 
             cap = out.aux.get("weight_cap", None)
             if cap is not None:
@@ -272,6 +282,20 @@ def evaluate_single_sim_fusion_with_timeseries(
         N = c_arr.shape[1]
         for i in range(N):
             out_dict[f"mean_cov_scale_s{i+1}"] = float(np.mean(c_arr[:, i]))
+
+    mp_arr = None
+    if len(mp_attn_all) > 0:
+        mp_arr = np.concatenate(mp_attn_all, axis=0)
+        for i in range(mp_arr.shape[1]):
+            for j in range(mp_arr.shape[2]):
+                out_dict[f"mean_mp_attn_p{i+1}_m{j+1}"] = float(np.mean(mp_arr[:, i, j]))
+
+    mm_arr = None
+    if len(mm_attn_all) > 0:
+        mm_arr = np.concatenate(mm_attn_all, axis=0)
+        for i in range(mm_arr.shape[1]):
+            for j in range(mm_arr.shape[2]):
+                out_dict[f"mean_mm_attn_m{i+1}_m{j+1}"] = float(np.mean(mm_arr[:, i, j]))
 
     cap_arr = None
     if len(cap_all) > 0:
@@ -533,6 +557,16 @@ def evaluate_single_sim_fusion_with_timeseries(
         if c_arr is not None:
             for i in range(n_nodes):
                 row[f"cov_scale_s{i+1}"] = float(c_arr[k, i])
+
+        if mp_arr is not None:
+            for i in range(mp_arr.shape[1]):
+                for j in range(mp_arr.shape[2]):
+                    row[f"mp_attn_p{i+1}_m{j+1}"] = float(mp_arr[k, i, j])
+
+        if mm_arr is not None:
+            for i in range(mm_arr.shape[1]):
+                for j in range(mm_arr.shape[2]):
+                    row[f"mm_attn_m{i+1}_m{j+1}"] = float(mm_arr[k, i, j])
 
         if cap_arr is not None:
             for i in range(n_nodes):

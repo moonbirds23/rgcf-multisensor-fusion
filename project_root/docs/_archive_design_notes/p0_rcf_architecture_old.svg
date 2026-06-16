@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1380" height="760" viewBox="0 0 1380 760">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      .title { font: 700 28px Arial, sans-serif; fill: #0f172a; }
+      .sub { font: 400 15px Arial, sans-serif; fill: #475569; }
+      .box-title { font: 700 18px Arial, sans-serif; fill: #0f172a; }
+      .box-text { font: 400 14px Arial, sans-serif; fill: #334155; }
+      .small { font: 400 12px Arial, sans-serif; fill: #475569; }
+      .box { stroke: #334155; stroke-width: 1.4; rx: 8; ry: 8; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .soft-arrow { stroke: #64748b; stroke-width: 1.6; fill: none; marker-end: url(#arrow); stroke-dasharray: 6 5; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1380" height="760" fill="#f8fafc"/>
+  <text x="48" y="48" class="title">P0-RCF: Reliability-Calibrated Fusion Network</text>
+  <text x="48" y="75" class="sub">Return to the stable P0 post-stream, then add calibrated reliability, conservative fusion candidates, and tracking confidence.</text>
+
+  <rect x="42" y="126" width="205" height="160" fill="#e0f2fe" class="box"/>
+  <text x="62" y="158" class="box-title">P0 Inputs</text>
+  <text x="62" y="190" class="box-text">local EKF posteriors</text>
+  <text x="62" y="214" class="box-text">x_i, P_i, valid_i</text>
+  <text x="62" y="238" class="box-text">sensor type / geometry</text>
+  <text x="62" y="262" class="small">No direct meas shortcut</text>
+
+  <rect x="303" y="126" width="235" height="160" fill="#dcfce7" class="box"/>
+  <text x="326" y="158" class="box-title">Feature Builder</text>
+  <text x="326" y="190" class="box-text">normalized post features</text>
+  <text x="326" y="214" class="box-text">cov shape: trace/logdet</text>
+  <text x="326" y="238" class="box-text">peer deviation features</text>
+  <text x="326" y="262" class="small">valid != reliable</text>
+
+  <rect x="600" y="126" width="235" height="160" fill="#fef3c7" class="box"/>
+  <text x="623" y="158" class="box-title">Graph Encoder</text>
+  <text x="623" y="190" class="box-text">node MLP + message passing</text>
+  <text x="623" y="214" class="box-text">peer consistency context</text>
+  <text x="623" y="238" class="box-text">global scene summary</text>
+  <text x="623" y="262" class="small">GNN models context, not final trust</text>
+
+  <rect x="902" y="96" width="215" height="130" fill="#ede9fe" class="box"/>
+  <text x="925" y="128" class="box-title">Reliability Head</text>
+  <text x="925" y="160" class="box-text">r_i: node reliability</text>
+  <text x="925" y="184" class="box-text">s_i: uncertainty inflation</text>
+  <text x="925" y="208" class="box-text">bad_i: abnormality risk</text>
+
+  <rect x="902" y="266" width="215" height="130" fill="#fee2e2" class="box"/>
+  <text x="925" y="298" class="box-title">Strategy Head</text>
+  <text x="925" y="330" class="box-text">alpha_AA</text>
+  <text x="925" y="354" class="box-text">alpha_Info</text>
+  <text x="925" y="378" class="box-text">alpha_Robust</text>
+
+  <rect x="348" y="430" width="235" height="110" fill="#f1f5f9" class="box"/>
+  <text x="371" y="462" class="box-title">Robust AA Candidate</text>
+  <text x="371" y="494" class="box-text">weighted arithmetic average</text>
+  <text x="371" y="518" class="box-text">uses clipped reliability</text>
+
+  <rect x="638" y="430" width="235" height="110" fill="#f1f5f9" class="box"/>
+  <text x="661" y="462" class="box-title">Safe Info Candidate</text>
+  <text x="661" y="494" class="box-text">information fusion</text>
+  <text x="661" y="518" class="box-text">cov floor + inflation</text>
+
+  <rect x="928" y="430" width="235" height="110" fill="#f1f5f9" class="box"/>
+  <text x="951" y="462" class="box-title">Robust Center Candidate</text>
+  <text x="951" y="494" class="box-text">Huber / trimmed / median-like</text>
+  <text x="951" y="518" class="box-text">guards against tail nodes</text>
+
+  <rect x="1190" y="210" width="150" height="120" fill="#cffafe" class="box"/>
+  <text x="1210" y="242" class="box-title">Fusion</text>
+  <text x="1210" y="274" class="box-text">x = sum alpha_k</text>
+  <text x="1210" y="298" class="box-text">    * x_k</text>
+
+  <rect x="1190" y="410" width="150" height="120" fill="#ffe4e6" class="box"/>
+  <text x="1210" y="442" class="box-title">Risk Head</text>
+  <text x="1210" y="474" class="box-text">tracking risk</text>
+  <text x="1210" y="498" class="box-text">confidence score</text>
+
+  <rect x="1168" y="610" width="195" height="80" fill="#dbeafe" class="box"/>
+  <text x="1192" y="644" class="box-title">Outputs</text>
+  <text x="1192" y="672" class="box-text">fused state + confidence</text>
+
+  <path d="M 247 206 L 303 206" class="arrow"/>
+  <path d="M 538 206 L 600 206" class="arrow"/>
+  <path d="M 835 180 L 902 160" class="arrow"/>
+  <path d="M 835 236 L 902 330" class="arrow"/>
+
+  <path d="M 1008 226 L 1008 418" class="soft-arrow"/>
+  <path d="M 420 286 L 420 430" class="arrow"/>
+  <path d="M 718 286 L 718 430" class="arrow"/>
+  <path d="M 1008 396 L 1008 430" class="arrow"/>
+
+  <path d="M 583 485 L 1190 250" class="arrow"/>
+  <path d="M 873 485 L 1190 268" class="arrow"/>
+  <path d="M 1163 485 L 1190 292" class="arrow"/>
+  <path d="M 1117 330 L 1190 270" class="arrow"/>
+
+  <path d="M 1265 330 L 1265 410" class="arrow"/>
+  <path d="M 1265 530 L 1265 610" class="arrow"/>
+
+  <text x="948" y="250" class="small">reliability controls candidate safety</text>
+  <text x="1125" y="354" class="small">strategy mixes candidates</text>
+  <text x="506" y="594" class="small">Training losses: tracking Huber + tail/CVaR + reliability ranking + calibration + weight safety + temporal smoothness</text>
+</svg>

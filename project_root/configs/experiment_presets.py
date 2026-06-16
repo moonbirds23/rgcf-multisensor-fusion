@@ -277,6 +277,17 @@ def _phase1r_rgcf(model: ModelConfig) -> ModelConfig:
     return out
 
 
+def _phase1r_me_rgcf_a0(model: ModelConfig) -> ModelConfig:
+    out = _phase1r_rgcf(model)
+    out.model_name = "me_rgcf_a0"
+    out.me_rgcf_m_in_dim = 18
+    out.me_rgcf_use_mm_attention = True
+    out.me_rgcf_use_mp_attention = True
+    out.me_rgcf_use_time_memory = False
+    out.fusion_variant = "ME-RGCF-A0 heterogeneous P/M graph without temporal memory"
+    return out
+
+
 def _v3(model: ModelConfig) -> ModelConfig:
     out = _v1(model)
     out.model_name = "post_meas_window_direct_fusion"
@@ -361,6 +372,8 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         table[scene_name] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
         table[f"{scene_name}_rgcf"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
         table[f"{scene_name}_rgcf_smoke"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
+        table[f"{scene_name}_me_rgcf_a0"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
+        table[f"{scene_name}_me_rgcf_a0_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
 
     if preset_name not in table:
         raise ValueError(f"Unknown preset_name: {preset_name}")

@@ -164,6 +164,55 @@ def apply_method_variant(bundle, method: str):
         model.fusion_variant = "Recovery-Aware Full Gate without Covariance Path"
         return bundle
 
+    if method == "SNF_A_skeptical_neural_fusion":
+        model.model_name = "skeptical_neural_fusion_a"
+        model.use_post_stream = True
+        model.use_meas_stream = True
+        model.use_gate = True
+        model.use_meas_in_representation = False
+        model.output_fusion_mode = "aa_mm"
+        model.base_logit_temperature = 2.0
+        model.weight_uniform_mix = 0.02
+        model.gate_init_bias = 0.0
+        model.gate_weight_alpha = 1.2
+        model.use_cov_calibration = True
+        model.use_cov_in_fusion = True
+        model.cov_weight_beta = 0.5
+        model.cov_calib_min_scale = 1.0
+        model.cov_calib_max_scale = 30.0
+        model.cov_prior_weight = 0.002
+        model.cov_sep_weight = 0.01
+        model.cov_fault_normal_margin = 1.0
+        model.snf_cap_min = 0.05
+        model.snf_cap_max = 0.85
+        model.snf_quarantine_penalty = 2.0
+        model.snf_use_valid_drift_aug = True
+        model.snf_aug_prob = 0.08
+        model.snf_aug_pos_drift = 0.08
+        model.snf_aug_vel_drift = 0.12
+        model.snf_aug_false_cov_log = 0.25
+        model.snf_risk_loss_weight = 0.05
+        model.snf_overconf_loss_weight = 0.02
+        model.snf_underconf_loss_weight = 0.005
+        model.snf_risk_error_scale = 20.0
+        model.snf_quarantine_loss_weight = 0.03
+        model.snf_cap_loss_weight = 0.02
+        model.snf_fused_nll_weight = 0.001
+        model.use_gate_supervision = True
+        model.use_balanced_gate_loss = True
+        model.gate_supervision_weight = 0.08
+        model.gate_prior_weight = 0.002
+        model.gate_prior_mean = 0.70
+        model.normal_gate_target = 0.85
+        model.fault_gate_target = 0.10
+        model.use_error_aware_gate_target = True
+        model.gate_error_tau = 8.0
+        model.gate_target_min = 0.05
+        model.fault_weight_loss_weight = 0.15
+        model.fault_weight_margin = 0.12
+        model.fusion_variant = "SNF-A Skeptical Cross-Examined AA-MM Fusion"
+        return bundle
+
     if method == "P5_cov_fusion_formula_only":
         model.model_name = "post_meas_soft_gate_fusion"
         model.use_post_stream = True

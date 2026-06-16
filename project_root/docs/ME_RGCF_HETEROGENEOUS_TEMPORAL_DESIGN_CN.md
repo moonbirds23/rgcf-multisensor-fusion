@@ -1,5 +1,11 @@
 # ME-RGCF：第二阶段异构图 + 时间记忆融合架构设计
 
+> 2026-06-16 更新：`ME-RGCF-A0` 最小异构图版本已经实现为可选方法
+> `me_rgcf_a0` / `ME-RGCF-A0`。当前实现只包含 3 个 P 节点 + 5 个 M
+> 节点的 M-M、M->P、P-P 图推理，不包含时间记忆、不包含污染场景、不包含
+> `delta_x`。默认主线仍是 `Phase1R RGCF`，ME-A0 需要在 benchmark 中显式
+> 使用 `--methods me-a0` 或 `--methods rgcf,me-a0` 启用。
+
 ## 0. 阶段定位
 
 本文档描述的是 **Phase2 设计方向**，不是当前 GPU 主实验的默认实现。

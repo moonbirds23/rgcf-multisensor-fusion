@@ -27,7 +27,22 @@ SCENE_LABELS = {
     "S2R": "maneuver-3track-2evidence",
 }
 RULE_METHODS = ["single-T1", "single-T2", "single-T3", "AVG-3T", "WAA-MM-3T", "CI-3T"]
-LEARNED_METHODS = ["RGCF"]
+
+
+@dataclass(frozen=True)
+class LearnedMethodSpec:
+    cli_name: str
+    display_name: str
+    run_slug: str
+    preset_suffix: str
+    model_name: str
+
+
+LEARNED_METHOD_SPECS = {
+    "rgcf": LearnedMethodSpec("rgcf", "RGCF", "RGCF", "rgcf", "phase1r_rgcf"),
+    "me-a0": LearnedMethodSpec("me-a0", "ME-RGCF-A0", "ME_RGCF_A0", "me_rgcf_a0", "me_rgcf_a0"),
+}
+LEARNED_METHODS = [LEARNED_METHOD_SPECS["rgcf"].display_name]
 
 
 @dataclass(frozen=True)
@@ -71,6 +86,29 @@ def parse_int_list(text: str) -> List[int]:
     return out
 
 
+def parse_methods(text: str | None) -> List[LearnedMethodSpec]:
+    raw = str(text or "rgcf").strip().lower()
+    if raw in {"", "default"}:
+        raw = "rgcf"
+    specs: List[LearnedMethodSpec] = []
+    seen = set()
+    for part in raw.split(","):
+        key = part.strip().lower()
+        if not key:
+            continue
+        if key == "me_a0":
+            key = "me-a0"
+        if key not in LEARNED_METHOD_SPECS:
+            allowed = ", ".join(sorted(LEARNED_METHOD_SPECS))
+            raise ValueError(f"Unknown --methods entry '{part}'. Allowed: {allowed}")
+        if key not in seen:
+            specs.append(LEARNED_METHOD_SPECS[key])
+            seen.add(key)
+    if not specs:
+        specs.append(LEARNED_METHOD_SPECS["rgcf"])
+    return specs
+
+
 def parse_mapping(text: str | None) -> Dict[str, str]:
     if not text:
         return {}
@@ -99,8 +137,9 @@ def configure_seed_ranges(bundle, ranges: SeedRanges) -> None:
     bundle.train.test_seed_start, bundle.train.test_seed_end = ranges.test
 
 
-def build_rgcf_bundle(
+def build_learned_bundle(
     scene: Phase1RScene,
+    method: LearnedMethodSpec,
     *,
     model_seed: int,
     seed_ranges: SeedRanges,
@@ -114,7 +153,7 @@ def build_rgcf_bundle(
     bundle = load_experiment_bundle(
         RunRequest(
             mode="train",
-            preset_name=f"{scene.preset_name}_rgcf",
+            preset_name=f"{scene.preset_name}_{method.preset_suffix}",
             device=device,
             epochs=epochs,
             lr=lr,
@@ -128,7 +167,7 @@ def build_rgcf_bundle(
         raise RuntimeError(f"Phase1R requires clean/no-pollution presets, got fault_mode={bundle.fault.mode}")
     configure_seed_ranges(bundle, seed_ranges)
     bundle.train.model_seed = int(model_seed)
-    bundle.model.model_name = "phase1r_rgcf"
+    bundle.model.model_name = method.model_name
     bundle.model.use_post_stream = True
     bundle.model.use_meas_stream = True
     bundle.model.use_gate = True
@@ -137,6 +176,10 @@ def build_rgcf_bundle(
     if smoke_duration is not None:
         bundle.scenario.motion.T = float(smoke_duration)
     return bundle
+
+
+def build_rgcf_bundle(scene: Phase1RScene, **kwargs):
+    return build_learned_bundle(scene, LEARNED_METHOD_SPECS["rgcf"], **kwargs)
 
 
 def build_dataset_source_bundle(
@@ -501,7 +544,13 @@ def evaluate_learned(
                 "error_pos": err,
             }
             for key, value in row.items():
-                if key.startswith("w_s") or key.startswith("cov_scale_s") or key.startswith("g_s"):
+                if (
+                    key.startswith("w_s")
+                    or key.startswith("cov_scale_s")
+                    or key.startswith("g_s")
+                    or key.startswith("mp_attn_p")
+                    or key.startswith("mm_attn_m")
+                ):
                     out_row[key] = value
             detail_rows.append(out_row)
     safe_label = run_label.replace("\\", "_").replace("/", "_").replace(":", "_")
@@ -563,6 +612,7 @@ def save_plan(
     *,
     out_dir: Path,
     scenes: Sequence[Phase1RScene],
+    learned_methods: Sequence[LearnedMethodSpec],
     model_seeds: Sequence[int],
     seed_ranges: SeedRanges,
     epochs: int,
@@ -590,27 +640,28 @@ def save_plan(
                 "hidden_dim": "",
                 "profile": "smoke" if smoke else "formal",
             })
-    for model_seed in model_seeds:
-        plan_rows.append({
-            "action": "train_rgcf_on_mixed_eval_s1r_s2r",
-            "scenario_id": "S1R+S2R",
-            "scenario_label": "mixed-train",
-            "scenario_preset": ",".join(s.preset_name for s in scenes),
-            "method": "RGCF",
-            "model_seed": model_seed,
-            "train_seed_range": f"{seed_ranges.train[0]}-{seed_ranges.train[1]} per scene",
-            "val_seed_range": f"{seed_ranges.val[0]}-{seed_ranges.val[1]} per scene",
-            "test_seed_range": f"{seed_ranges.test[0]}-{seed_ranges.test[1]}",
-            "epochs": epochs,
-            "lr": lr,
-            "batch_size": batch_size,
-            "hidden_dim": hidden_dim,
-            "profile": "smoke" if smoke else "formal",
-        })
+    for method in learned_methods:
+        for model_seed in model_seeds:
+            plan_rows.append({
+                "action": f"train_{method.cli_name}_on_mixed_eval_s1r_s2r",
+                "scenario_id": "S1R+S2R",
+                "scenario_label": "mixed-train",
+                "scenario_preset": ",".join(s.preset_name for s in scenes),
+                "method": method.display_name,
+                "model_seed": model_seed,
+                "train_seed_range": f"{seed_ranges.train[0]}-{seed_ranges.train[1]} per scene",
+                "val_seed_range": f"{seed_ranges.val[0]}-{seed_ranges.val[1]} per scene",
+                "test_seed_range": f"{seed_ranges.test[0]}-{seed_ranges.test[1]}",
+                "epochs": epochs,
+                "lr": lr,
+                "batch_size": batch_size,
+                "hidden_dim": hidden_dim,
+                "profile": "smoke" if smoke else "formal",
+            })
     plan = {
         "benchmark": "Phase1R RGCF Corrected 3-Track 2-Evidence Benchmark",
         "scenes": [asdict(s) for s in scenes],
-        "methods": RULE_METHODS + LEARNED_METHODS,
+        "methods": RULE_METHODS + [m.display_name for m in learned_methods],
         "main_method": "RGCF",
         "sensor_protocol": "T1/T2/T3 are posterior track sensors; E1/E2 are measurement evidence only.",
         "training_protocol": "single S1R/S2R mixed train/val store; evaluate separately on S1R and S2R",
@@ -643,6 +694,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run Phase1R RGCF corrected GPU benchmark.")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--smoke", action="store_true")
+    p.add_argument("--methods", default="rgcf", help="Learned methods to run: rgcf, me-a0, or rgcf,me-a0. Rule baselines always run.")
     p.add_argument("--out-dir", default=str(PROJECT_ROOT / "results" / "phase1r_rgcf_compare"))
     p.add_argument("--dataset-store-root", default=str(PROJECT_ROOT / "dataset_store"))
     p.add_argument("--scenario-presets", default=None)
@@ -683,11 +735,13 @@ def main() -> None:
     args = parse_args()
     out_dir = Path(args.out_dir)
     scenes = build_scenes(args.scenario_presets)
+    learned_methods = parse_methods(args.methods)
     model_seeds, seed_ranges, epochs = resolved_runtime(args)
     smoke_duration = float(args.smoke_duration) if args.smoke else None
     plan_rows = save_plan(
         out_dir=out_dir,
         scenes=scenes,
+        learned_methods=learned_methods,
         model_seeds=model_seeds,
         seed_ranges=seed_ranges,
         epochs=epochs,
@@ -699,7 +753,7 @@ def main() -> None:
     print("=" * 88)
     print("Phase1R RGCF benchmark plan")
     print("[train_scene_set] S1R+S2R")
-    print(f"[methods] {', '.join(RULE_METHODS + LEARNED_METHODS)}")
+    print(f"[methods] {', '.join(RULE_METHODS + [m.display_name for m in learned_methods])}")
     print(f"[model_init_seeds] {', '.join(str(s) for s in model_seeds)}")
     print(f"[runs] {len(plan_rows)}")
     print(f"[plan_json] {out_dir / 'phase1r_plan.json'}")
@@ -752,89 +806,94 @@ def main() -> None:
     save_run_outputs(rows, out_dir)
 
     train_scene = scenes[0]
-    for run_idx, model_seed in enumerate(model_seeds, start=1):
-        train_run_label = f"phase1r_mixed_RGCF__modelseed{model_seed}"
-        eval_labels = [f"{train_run_label}__test_{scene.scene_id}" for scene in scenes]
-        print("=" * 88)
-        print(f"[run {run_idx}/{len(model_seeds)}] {train_run_label}")
-        if args.resume and all(label in completed for label in eval_labels):
-            print(f"[skip completed] {train_run_label}")
-            continue
-
-        bundle = build_rgcf_bundle(
-            train_scene,
-            model_seed=model_seed,
-            seed_ranges=seed_ranges,
-            epochs=epochs,
-            lr=args.lr,
-            batch_size=args.batch_size,
-            hidden_dim=args.hidden_dim,
-            device=args.device,
-            smoke_duration=smoke_duration,
-        )
-        bundle.identity.preset_name = train_run_label
-        bundle.identity.experiment_name = train_run_label
-        bundle.identity.scene_name = "S1R_S2R_mixed"
-
-        res = run_train_experiment(
-            bundle,
-            epochs=epochs,
-            lr=args.lr,
-            batch_size=args.batch_size,
-            dataset_store_root=args.dataset_store_root,
-            dataset_dir=mixed_dataset_dir,
-        )
-        rm = ResultManager(bundle, mode="train", experiment_name_override=train_run_label)
-        rm.save_train_result(
-            train_info=res.train_info,
-            history=res.history,
-            quick_baseline_metrics=res.quick_baseline_metrics,
-            quick_gnn_metrics=res.quick_gnn_metrics,
-            quick_sim=res.quick_sim,
-            model=res.model,
-            quick_gnn_timeseries=res.quick_gnn_timeseries,
-        )
-
-        for scene in scenes:
-            eval_run_label = f"{train_run_label}__test_{scene.scene_id}"
-            if args.resume and eval_run_label in completed:
+    total_learned_runs = len(learned_methods) * len(model_seeds)
+    run_idx = 0
+    for method in learned_methods:
+        for model_seed in model_seeds:
+            run_idx += 1
+            train_run_label = f"phase1r_mixed_{method.run_slug}__modelseed{model_seed}"
+            eval_labels = [f"{train_run_label}__test_{scene.scene_id}" for scene in scenes]
+            print("=" * 88)
+            print(f"[run {run_idx}/{total_learned_runs}] {train_run_label}")
+            if args.resume and all(label in completed for label in eval_labels):
+                print(f"[skip completed] {train_run_label}")
                 continue
-            metrics = evaluate_learned(
-                model=res.model,
-                bundle=bundle,
-                scene=scene,
-                test_sims=scene_splits[scene.scene_id]["test"],
-                out_dir=out_dir,
-                run_label=eval_run_label,
+
+            bundle = build_learned_bundle(
+                train_scene,
+                method,
+                model_seed=model_seed,
+                seed_ranges=seed_ranges,
+                epochs=epochs,
+                lr=args.lr,
+                batch_size=args.batch_size,
+                hidden_dim=args.hidden_dim,
+                device=args.device,
+                smoke_duration=smoke_duration,
             )
-            rows.append({
-                "status": "ok",
-                "scenario_id": scene.scene_id,
-                "scenario_label": scene.label,
-                "scenario_preset": scene.preset_name,
-                "method": "RGCF",
-                "method_category": "learned",
-                "model_seed": model_seed,
-                "run_label": eval_run_label,
-                "train_run_label": train_run_label,
-                "run_dir": str(rm.run_dir),
-                "dataset_dir": mixed_dataset_dir,
-                "train_dataset_protocol": "S1R/S2R mixed",
-                "train_seed_range": f"{seed_ranges.train[0]}-{seed_ranges.train[1]} per scene",
-                "val_seed_range": f"{seed_ranges.val[0]}-{seed_ranges.val[1]} per scene",
-                "test_seed_range": f"{seed_ranges.test[0]}-{seed_ranges.test[1]}",
-                "epochs": epochs,
-                "lr": args.lr,
-                "batch_size": args.batch_size,
-                "hidden_dim": args.hidden_dim,
-                "best_epoch": res.train_info.get("best_epoch", ""),
-                "best_val_loss": res.train_info.get("best_val_loss", ""),
-                "test_loss": res.train_info.get("test_loss", ""),
-                "test_loss_pos": res.train_info.get("test_loss_pos", ""),
-                **metrics,
-            })
-            completed.add(eval_run_label)
-        save_run_outputs(rows, out_dir)
+            bundle.identity.preset_name = train_run_label
+            bundle.identity.experiment_name = train_run_label
+            bundle.identity.scene_name = "S1R_S2R_mixed"
+
+            res = run_train_experiment(
+                bundle,
+                epochs=epochs,
+                lr=args.lr,
+                batch_size=args.batch_size,
+                dataset_store_root=args.dataset_store_root,
+                dataset_dir=mixed_dataset_dir,
+            )
+            rm = ResultManager(bundle, mode="train", experiment_name_override=train_run_label)
+            rm.save_train_result(
+                train_info=res.train_info,
+                history=res.history,
+                quick_baseline_metrics=res.quick_baseline_metrics,
+                quick_gnn_metrics=res.quick_gnn_metrics,
+                quick_sim=res.quick_sim,
+                model=res.model,
+                quick_gnn_timeseries=res.quick_gnn_timeseries,
+            )
+
+            for scene in scenes:
+                eval_run_label = f"{train_run_label}__test_{scene.scene_id}"
+                if args.resume and eval_run_label in completed:
+                    continue
+                metrics = evaluate_learned(
+                    model=res.model,
+                    bundle=bundle,
+                    scene=scene,
+                    test_sims=scene_splits[scene.scene_id]["test"],
+                    out_dir=out_dir,
+                    run_label=eval_run_label,
+                )
+                rows.append({
+                    "status": "ok",
+                    "scenario_id": scene.scene_id,
+                    "scenario_label": scene.label,
+                    "scenario_preset": scene.preset_name,
+                    "method": method.display_name,
+                    "method_category": "learned",
+                    "model_seed": model_seed,
+                    "run_label": eval_run_label,
+                    "train_run_label": train_run_label,
+                    "run_dir": str(rm.run_dir),
+                    "dataset_dir": mixed_dataset_dir,
+                    "train_dataset_protocol": "S1R/S2R mixed",
+                    "train_seed_range": f"{seed_ranges.train[0]}-{seed_ranges.train[1]} per scene",
+                    "val_seed_range": f"{seed_ranges.val[0]}-{seed_ranges.val[1]} per scene",
+                    "test_seed_range": f"{seed_ranges.test[0]}-{seed_ranges.test[1]}",
+                    "epochs": epochs,
+                    "lr": args.lr,
+                    "batch_size": args.batch_size,
+                    "hidden_dim": args.hidden_dim,
+                    "best_epoch": res.train_info.get("best_epoch", ""),
+                    "best_val_loss": res.train_info.get("best_val_loss", ""),
+                    "test_loss": res.train_info.get("test_loss", ""),
+                    "test_loss_pos": res.train_info.get("test_loss_pos", ""),
+                    **metrics,
+                })
+                completed.add(eval_run_label)
+            save_run_outputs(rows, out_dir)
 
     print("=" * 88)
     print("[done] Phase1R RGCF benchmark")
