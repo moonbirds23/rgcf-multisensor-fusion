@@ -1,0 +1,6 @@
+worst_case,metric,scenario,model_seed,value,file
+lowest_raw_residual_corr,raw_residual_corr,S1R,4,0.5094193106963353,D:\code\python\project-2\project_root\results\phase2_me_a0_dir_hs_only\eval_details\phase1r_mixed_ME_RGCF_A0D_HS__modelseed4__test_S1R_errors.csv
+lowest_high_spread_corr,high_spread_corr,S1R,4,0.5807098155511704,D:\code\python\project-2\project_root\results\phase2_me_a0_dir_hs_only\eval_details\phase1r_mixed_ME_RGCF_A0D_HS__modelseed4__test_S1R_errors.csv
+lowest_hit_rate,worst_track_hit_rate,S1R,0,1.0,D:\code\python\project-2\project_root\results\phase2_me_a0_dir_hs_only\eval_details\phase1r_mixed_ME_RGCF_A0D_HS__modelseed0__test_S1R_errors.csv
+highest_tail_error,error_pos_max,S1R,4,4.171980857849121,D:\code\python\project-2\project_root\results\phase2_me_a0_dir_hs_only\eval_details\phase1r_mixed_ME_RGCF_A0D_HS__modelseed4__test_S1R_errors.csv
+highest_rmse_proxy,error_pos_mean,S2R,4,1.3005734236530997,D:\code\python\project-2\project_root\results\phase2_me_a0_dir_hs_only\eval_details\phase1r_mixed_ME_RGCF_A0D_HS__modelseed4__test_S2R_errors.csv
