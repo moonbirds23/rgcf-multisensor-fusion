@@ -1,0 +1,46 @@
+[
+  {
+    "scenario_id": "S1R",
+    "scenario_label": "basic-3track-2evidence",
+    "sensor": "E1",
+    "residual_metric": "normalized_residual_to_track_prior",
+    "num_points": 201,
+    "rmse": 1.0624513505617275,
+    "p95": 2.038735717204901,
+    "p99": 2.575763454509244,
+    "max": 2.674536333878442
+  },
+  {
+    "scenario_id": "S1R",
+    "scenario_label": "basic-3track-2evidence",
+    "sensor": "E2",
+    "residual_metric": "normalized_residual_to_track_prior",
+    "num_points": 201,
+    "rmse": 1.0791772202685546,
+    "p95": 2.010492110345748,
+    "p99": 2.7750234497752913,
+    "max": 2.96126751556437
+  },
+  {
+    "scenario_id": "S2R",
+    "scenario_label": "maneuver-3track-2evidence",
+    "sensor": "E1",
+    "residual_metric": "normalized_residual_to_track_prior",
+    "num_points": 201,
+    "rmse": 1.0574117547258963,
+    "p95": 2.0394040047409066,
+    "p99": 2.5440910734973796,
+    "max": 2.669298091086906
+  },
+  {
+    "scenario_id": "S2R",
+    "scenario_label": "maneuver-3track-2evidence",
+    "sensor": "E2",
+    "residual_metric": "normalized_residual_to_track_prior",
+    "num_points": 201,
+    "rmse": 1.1039776917624928,
+    "p95": 2.0411689882823976,
+    "p99": 2.7757954592454332,
+    "max": 3.1678599200805833
+  }
+]

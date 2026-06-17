@@ -1,0 +1,14 @@
+action,scenario_id,scenario_label,scenario_preset,method,model_seed,train_seed_range,val_seed_range,test_seed_range,epochs,lr,batch_size,hidden_dim,profile
+evaluate_rule_baseline,S1R,basic-3track-2evidence,phase1r_basic_3track_2evidence_nominal,single-T1,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S1R,basic-3track-2evidence,phase1r_basic_3track_2evidence_nominal,single-T2,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S1R,basic-3track-2evidence,phase1r_basic_3track_2evidence_nominal,single-T3,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S1R,basic-3track-2evidence,phase1r_basic_3track_2evidence_nominal,AVG-3T,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S1R,basic-3track-2evidence,phase1r_basic_3track_2evidence_nominal,WAA-MM-3T,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S1R,basic-3track-2evidence,phase1r_basic_3track_2evidence_nominal,CI-3T,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S2R,maneuver-3track-2evidence,phase1r_maneuver_3track_2evidence_nominal,single-T1,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S2R,maneuver-3track-2evidence,phase1r_maneuver_3track_2evidence_nominal,single-T2,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S2R,maneuver-3track-2evidence,phase1r_maneuver_3track_2evidence_nominal,single-T3,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S2R,maneuver-3track-2evidence,phase1r_maneuver_3track_2evidence_nominal,AVG-3T,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S2R,maneuver-3track-2evidence,phase1r_maneuver_3track_2evidence_nominal,WAA-MM-3T,,10-10,70-70,90-90,,,,,smoke
+evaluate_rule_baseline,S2R,maneuver-3track-2evidence,phase1r_maneuver_3track_2evidence_nominal,CI-3T,,10-10,70-70,90-90,,,,,smoke
+train_me-a0-dir-hs_on_mixed_eval_s1r_s2r,S1R+S2R,mixed-train,"phase1r_basic_3track_2evidence_nominal,phase1r_maneuver_3track_2evidence_nominal",ME-RGCF-A0D-HS,0,10-10 per scene,70-70 per scene,90-90,1,0.001,64,64,smoke

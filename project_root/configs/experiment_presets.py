@@ -301,6 +301,21 @@ def _phase1r_me_rgcf_a0_dir(model: ModelConfig) -> ModelConfig:
     return out
 
 
+def _phase1r_me_rgcf_a0_dir_hs(model: ModelConfig) -> ModelConfig:
+    out = _phase1r_me_rgcf_a0_dir(model)
+    out.model_name = "me_rgcf_a0_dir_hs"
+    out.me_rgcf_mp_dir_loss_mode = "high_spread"
+    out.me_rgcf_mp_dir_loss_weight = 0.005
+    out.me_rgcf_hs_identity_loss_weight = 0.25
+    out.me_rgcf_hs_evidence_loss_weight = 1.0
+    out.me_rgcf_hs_spread_start_q = 0.70
+    out.me_rgcf_hs_spread_full_q = 0.90
+    out.me_rgcf_hs_min_gate = 0.0
+    out.me_rgcf_hs_evidence_temperature = 1.0
+    out.fusion_variant = "ME-RGCF-A0D-HS high-spread aware directional evidence loss"
+    return out
+
+
 def _v3(model: ModelConfig) -> ModelConfig:
     out = _v1(model)
     out.model_name = "post_meas_window_direct_fusion"
@@ -389,6 +404,8 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         table[f"{scene_name}_me_rgcf_a0_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_dir"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_dir_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir(model), scene_name)
+        table[f"{scene_name}_me_rgcf_a0_dir_hs"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir_hs(model), scene_name)
+        table[f"{scene_name}_me_rgcf_a0_dir_hs_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir_hs(model), scene_name)
 
     if preset_name not in table:
         raise ValueError(f"Unknown preset_name: {preset_name}")

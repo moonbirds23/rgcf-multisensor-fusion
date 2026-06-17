@@ -1,0 +1,5 @@
+scenario_id,scenario_label,sensor,residual_metric,num_points,rmse,p95,p99,max
+S1R,basic-3track-2evidence,E1,normalized_residual_to_track_prior,201,1.0624513505617275,2.038735717204901,2.575763454509244,2.674536333878442
+S1R,basic-3track-2evidence,E2,normalized_residual_to_track_prior,201,1.0791772202685546,2.010492110345748,2.7750234497752913,2.96126751556437
+S2R,maneuver-3track-2evidence,E1,normalized_residual_to_track_prior,201,1.0574117547258963,2.0394040047409066,2.5440910734973796,2.669298091086906
+S2R,maneuver-3track-2evidence,E2,normalized_residual_to_track_prior,201,1.1039776917624928,2.0411689882823976,2.7757954592454332,3.1678599200805833

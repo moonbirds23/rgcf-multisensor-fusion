@@ -24,6 +24,13 @@ class ModelConfig:
     me_rgcf_mp_dir_loss_weight: float = 0.0
     me_rgcf_mp_dir_identity_weight: float = 1.0
     me_rgcf_mp_dir_evidence_weight: float = 0.75
+    me_rgcf_mp_dir_loss_mode: str = "full_softmax"
+    me_rgcf_hs_identity_loss_weight: float = 0.25
+    me_rgcf_hs_evidence_loss_weight: float = 1.0
+    me_rgcf_hs_spread_start_q: float = 0.70
+    me_rgcf_hs_spread_full_q: float = 0.90
+    me_rgcf_hs_min_gate: float = 0.0
+    me_rgcf_hs_evidence_temperature: float = 1.0
     hidden_dim: int = 64
     meas_hidden_dim: int = 64
     gate_hidden_dim: int = 64

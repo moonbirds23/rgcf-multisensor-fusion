@@ -9,8 +9,8 @@ from core.types import ExperimentBundle
 from .meas_features import EvidenceFeatureOutput, MeasFeatureOutput, build_evidence_node_features_from_sim, build_meas_node_features_from_sim, build_mp_pair_features_from_sim
 from .post_features import PostFeatureOutput, build_post_node_features_from_sim
 
-PHASE1R_EVIDENCE_MODELS = {"phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir"}
-PHASE1R_PAIR_MODELS = {"me_rgcf_a0_dir"}
+PHASE1R_EVIDENCE_MODELS = {"phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir", "me_rgcf_a0_dir_hs"}
+PHASE1R_PAIR_MODELS = {"me_rgcf_a0_dir", "me_rgcf_a0_dir_hs"}
 
 
 @dataclass

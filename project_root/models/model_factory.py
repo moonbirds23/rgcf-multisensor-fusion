@@ -92,7 +92,7 @@ def build_model_from_bundle(bundle: ExperimentBundle):
             use_mp_attention=bool(getattr(bundle.model, "me_rgcf_use_mp_attention", True)),
             **common,
         )
-    if name == "me_rgcf_a0_dir":
+    if name in {"me_rgcf_a0_dir", "me_rgcf_a0_dir_hs"}:
         return MeasurementEvaluatedRGCFA0Directional(
             post_in_dim=int(bundle.model.post_in_dim),
             meas_in_dim=int(getattr(bundle.model, "me_rgcf_m_in_dim", bundle.model.meas_in_dim)),

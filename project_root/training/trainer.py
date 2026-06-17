@@ -175,6 +175,9 @@ class TrainHistoryItem:
     train_loss_cap: float = 0.0
     train_loss_fused_nll: float = 0.0
     train_loss_mp_dir: float = 0.0
+    train_loss_mp_dir_identity: float = 0.0
+    train_loss_mp_dir_evidence: float = 0.0
+    train_mean_mp_hs_gate: float = 0.0
     train_mean_mp_attn_entropy: float = 0.0
     train_mean_mp_attn_row_std: float = 0.0
     train_valid_drift_aug_count: float = 0.0
@@ -564,6 +567,9 @@ def train_fusion_model(
         train_cap_sum = 0.0
         train_fused_nll_sum = 0.0
         train_mp_dir_sum = 0.0
+        train_mp_dir_identity_sum = 0.0
+        train_mp_dir_evidence_sum = 0.0
+        train_mp_hs_gate_sum = 0.0
         train_mp_entropy_sum = 0.0
         train_mp_row_std_sum = 0.0
         train_aug_count = 0
@@ -661,6 +667,13 @@ def train_fusion_model(
                     mp_dir_loss_weight=float(getattr(bundle.model, "me_rgcf_mp_dir_loss_weight", 0.0)),
                     mp_dir_identity_weight=float(getattr(bundle.model, "me_rgcf_mp_dir_identity_weight", 1.0)),
                     mp_dir_evidence_weight=float(getattr(bundle.model, "me_rgcf_mp_dir_evidence_weight", 0.75)),
+                    mp_dir_loss_mode=str(getattr(bundle.model, "me_rgcf_mp_dir_loss_mode", "full_softmax")),
+                    hs_identity_loss_weight=float(getattr(bundle.model, "me_rgcf_hs_identity_loss_weight", 0.25)),
+                    hs_evidence_loss_weight=float(getattr(bundle.model, "me_rgcf_hs_evidence_loss_weight", 1.0)),
+                    hs_spread_start_q=float(getattr(bundle.model, "me_rgcf_hs_spread_start_q", 0.70)),
+                    hs_spread_full_q=float(getattr(bundle.model, "me_rgcf_hs_spread_full_q", 0.90)),
+                    hs_min_gate=float(getattr(bundle.model, "me_rgcf_hs_min_gate", 0.0)),
+                    hs_evidence_temperature=float(getattr(bundle.model, "me_rgcf_hs_evidence_temperature", 1.0)),
                     balanced_gate_loss=bool(getattr(bundle.model, "use_balanced_gate_loss", True)),
                     fault_gate_threshold=0.5 * (
                         float(getattr(bundle.model, "normal_gate_target", 0.8))
@@ -694,6 +707,9 @@ def train_fusion_model(
             train_cap_sum += info.get("loss_cap", 0.0) * bs
             train_fused_nll_sum += info.get("loss_fused_nll", 0.0) * bs
             train_mp_dir_sum += info.get("loss_mp_dir", 0.0) * bs
+            train_mp_dir_identity_sum += info.get("loss_mp_dir_identity", 0.0) * bs
+            train_mp_dir_evidence_sum += info.get("loss_mp_dir_evidence", 0.0) * bs
+            train_mp_hs_gate_sum += info.get("mean_mp_hs_gate", 0.0) * bs
             train_mp_entropy_sum += info.get("mean_mp_attn_entropy", 0.0) * bs
             train_mp_row_std_sum += info.get("mean_mp_attn_row_std", 0.0) * bs
             n += bs
@@ -722,6 +738,9 @@ def train_fusion_model(
             "loss_cap": train_cap_sum / max(n, 1),
             "loss_fused_nll": train_fused_nll_sum / max(n, 1),
             "loss_mp_dir": train_mp_dir_sum / max(n, 1),
+            "loss_mp_dir_identity": train_mp_dir_identity_sum / max(n, 1),
+            "loss_mp_dir_evidence": train_mp_dir_evidence_sum / max(n, 1),
+            "mean_mp_hs_gate": train_mp_hs_gate_sum / max(n, 1),
             "mean_mp_attn_entropy": train_mp_entropy_sum / max(n, 1),
             "mean_mp_attn_row_std": train_mp_row_std_sum / max(n, 1),
             "valid_drift_aug_count": float(train_aug_count),
@@ -761,6 +780,9 @@ def train_fusion_model(
             train_loss_cap=float(train_metrics["loss_cap"]),
             train_loss_fused_nll=float(train_metrics["loss_fused_nll"]),
             train_loss_mp_dir=float(train_metrics["loss_mp_dir"]),
+            train_loss_mp_dir_identity=float(train_metrics["loss_mp_dir_identity"]),
+            train_loss_mp_dir_evidence=float(train_metrics["loss_mp_dir_evidence"]),
+            train_mean_mp_hs_gate=float(train_metrics["mean_mp_hs_gate"]),
             train_mean_mp_attn_entropy=float(train_metrics["mean_mp_attn_entropy"]),
             train_mean_mp_attn_row_std=float(train_metrics["mean_mp_attn_row_std"]),
             train_valid_drift_aug_count=float(train_metrics["valid_drift_aug_count"]),

@@ -1,0 +1,62 @@
+[
+  {
+    "scenario_id": "S1R",
+    "scenario_label": "basic-3track-2evidence",
+    "sensor": "T1",
+    "num_points": 201,
+    "rmse": 1.6302153889040016,
+    "p95": 2.525518807726141,
+    "p99": 4.366916909676674,
+    "max": 5.079488978865406
+  },
+  {
+    "scenario_id": "S1R",
+    "scenario_label": "basic-3track-2evidence",
+    "sensor": "T2",
+    "num_points": 201,
+    "rmse": 1.574944019292477,
+    "p95": 2.540807842525709,
+    "p99": 3.399482506942454,
+    "max": 4.221134530692936
+  },
+  {
+    "scenario_id": "S1R",
+    "scenario_label": "basic-3track-2evidence",
+    "sensor": "T3",
+    "num_points": 201,
+    "rmse": 2.2540008526361377,
+    "p95": 3.6164356381583516,
+    "p99": 5.513093982634703,
+    "max": 11.759960414970257
+  },
+  {
+    "scenario_id": "S2R",
+    "scenario_label": "maneuver-3track-2evidence",
+    "sensor": "T1",
+    "num_points": 201,
+    "rmse": 1.867557627810617,
+    "p95": 2.671249891436304,
+    "p99": 4.3735382404893,
+    "max": 5.0843321197172315
+  },
+  {
+    "scenario_id": "S2R",
+    "scenario_label": "maneuver-3track-2evidence",
+    "sensor": "T2",
+    "num_points": 201,
+    "rmse": 1.799736791588507,
+    "p95": 2.6682809785771617,
+    "p99": 3.410578498527879,
+    "max": 4.218230287883756
+  },
+  {
+    "scenario_id": "S2R",
+    "scenario_label": "maneuver-3track-2evidence",
+    "sensor": "T3",
+    "num_points": 201,
+    "rmse": 2.580419164289125,
+    "p95": 4.513396705618035,
+    "p99": 5.386106263001735,
+    "max": 11.767286242452107
+  }
+]

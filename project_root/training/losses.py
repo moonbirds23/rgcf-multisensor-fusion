@@ -68,6 +68,13 @@ def compute_fusion_loss_with_gate(
     mp_dir_loss_weight: float = 0.0,
     mp_dir_identity_weight: float = 1.0,
     mp_dir_evidence_weight: float = 0.75,
+    mp_dir_loss_mode: str = "full_softmax",
+    hs_identity_loss_weight: float = 0.25,
+    hs_evidence_loss_weight: float = 1.0,
+    hs_spread_start_q: float = 0.70,
+    hs_spread_full_q: float = 0.90,
+    hs_min_gate: float = 0.0,
+    hs_evidence_temperature: float = 1.0,
     balanced_gate_loss: bool = True,
     fault_gate_threshold: float = 0.5,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -217,6 +224,9 @@ def compute_fusion_loss_with_gate(
         tail_loss = (tail * tail).mean()
 
     mp_dir_loss = pred.new_tensor(0.0)
+    mp_dir_identity_loss = pred.new_tensor(0.0)
+    mp_dir_evidence_loss = pred.new_tensor(0.0)
+    mean_mp_hs_gate = pred.new_tensor(0.0)
     mean_mp_attn_entropy = pred.new_tensor(0.0)
     mean_mp_attn_row_std = pred.new_tensor(0.0)
     if (
@@ -227,16 +237,67 @@ def compute_fusion_loss_with_gate(
         pair = mp_pair_feat.to(device=mp_attn.device, dtype=mp_attn.dtype)
         valid_m = pair[..., 7].clamp(0.0, 1.0)
         valid_p = pair[..., 6].clamp(0.0, 1.0)
-        target_logits = (
-            float(mp_dir_identity_weight) * pair[..., 0]
-            + float(mp_dir_evidence_weight) * pair[..., 2] * pair[..., 5]
-        )
-        target_logits = target_logits + (valid_m - 1.0) * 1e9
-        target_attn = torch.softmax(target_logits, dim=-1).detach()
         attn = mp_attn.clamp_min(1e-8)
-        kl = target_attn * (torch.log(target_attn.clamp_min(1e-8)) - torch.log(attn))
         denom = valid_p[..., 0].sum().clamp_min(1.0)
-        mp_dir_loss = (kl.sum(dim=-1) * valid_p[..., 0]).sum() / denom
+        mode = str(mp_dir_loss_mode or "full_softmax").lower()
+        if mode in {"high_spread", "hs", "a0d_hs"}:
+            # Split directionality into (1) a weak own-measurement anchor and
+            # (2) a high-spread evidence-to-track directional objective. The
+            # second term is gated by residual spread, so ambiguous evidence
+            # windows do not dominate the auxiliary loss.
+            p_count = min(3, mp_attn.shape[-2], mp_attn.shape[-1])
+            own_idx = torch.arange(p_count, device=mp_attn.device)
+            own_attn = attn[..., own_idx, own_idx]
+            own_valid = (valid_p[..., own_idx, own_idx] * valid_m[..., own_idx, own_idx]).clamp(0.0, 1.0)
+            mp_dir_identity_loss = -(torch.log(own_attn.clamp_min(1e-8)) * own_valid).sum() / own_valid.sum().clamp_min(1.0)
+
+            if mp_attn.shape[-1] >= 5 and pair.shape[-2] >= 5:
+                ev_attn = attn[..., :p_count, 3:5]  # [B, P, E]
+                ev_rank = pair[..., :p_count, 3:5, 5]
+                ev_res = pair[..., :p_count, 3:5, 3]
+                ev_valid = (pair[..., :p_count, 3:5, 6] * pair[..., :p_count, 3:5, 7]).clamp(0.0, 1.0)
+                pred_by_e = ev_attn.transpose(-1, -2)  # [B, E, P]
+                rank_by_e = ev_rank.transpose(-1, -2)
+                valid_by_e = ev_valid.transpose(-1, -2)
+                res_by_e = ev_res.transpose(-1, -2)
+
+                spread = torch.nan_to_num(res_by_e, nan=0.0).amax(dim=-1) - torch.nan_to_num(res_by_e, nan=0.0).amin(dim=-1)
+                ev_available = (valid_by_e.sum(dim=-1) > 0.5).to(pred.dtype)
+                spread_vals = spread[ev_available > 0.5]
+                if spread_vals.numel() > 0:
+                    q0 = min(max(float(hs_spread_start_q), 0.0), 1.0)
+                    q1 = min(max(float(hs_spread_full_q), q0 + 1e-4), 1.0)
+                    start = torch.quantile(spread_vals.detach(), q0)
+                    full = torch.quantile(spread_vals.detach(), q1)
+                    gate = ((spread - start) / (full - start).clamp_min(1e-6)).clamp(0.0, 1.0).detach()
+                    min_gate = min(max(float(hs_min_gate), 0.0), 1.0)
+                    if min_gate > 0.0:
+                        gate = min_gate + (1.0 - min_gate) * gate
+                    gate = gate * ev_available
+                    mean_mp_hs_gate = gate.sum() / ev_available.sum().clamp_min(1.0)
+
+                    target_logits = (float(mp_dir_evidence_weight) / max(float(hs_evidence_temperature), 1e-6)) * rank_by_e
+                    target_logits = target_logits + (valid_by_e - 1.0) * 1e9
+                    target = torch.softmax(target_logits, dim=-1).detach()
+                    pred_norm = pred_by_e * valid_by_e
+                    pred_norm = pred_norm / pred_norm.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                    kl = target * (torch.log(target.clamp_min(1e-8)) - torch.log(pred_norm.clamp_min(1e-8)))
+                    kl = kl.sum(dim=-1)
+                    mp_dir_evidence_loss = (kl * gate).sum() / gate.sum().clamp_min(1.0)
+
+            mp_dir_loss = (
+                float(hs_identity_loss_weight) * mp_dir_identity_loss
+                + float(hs_evidence_loss_weight) * mp_dir_evidence_loss
+            )
+        else:
+            target_logits = (
+                float(mp_dir_identity_weight) * pair[..., 0]
+                + float(mp_dir_evidence_weight) * pair[..., 2] * pair[..., 5]
+            )
+            target_logits = target_logits + (valid_m - 1.0) * 1e9
+            target_attn = torch.softmax(target_logits, dim=-1).detach()
+            kl = target_attn * (torch.log(target_attn.clamp_min(1e-8)) - torch.log(attn))
+            mp_dir_loss = (kl.sum(dim=-1) * valid_p[..., 0]).sum() / denom
         mean_mp_attn_entropy = (-(attn * torch.log(attn)).sum(dim=-1) * valid_p[..., 0]).sum() / denom
         mean_mp_attn_row_std = mp_attn.std(dim=1).mean()
 
@@ -285,6 +346,9 @@ def compute_fusion_loss_with_gate(
         "loss_fused_nll": fused_nll_loss.detach().item(),
         "loss_tail": tail_loss.detach().item(),
         "loss_mp_dir": mp_dir_loss.detach().item(),
+        "loss_mp_dir_identity": mp_dir_identity_loss.detach().item(),
+        "loss_mp_dir_evidence": mp_dir_evidence_loss.detach().item(),
+        "mean_mp_hs_gate": mean_mp_hs_gate.detach().item(),
         "mean_mp_attn_entropy": mean_mp_attn_entropy.detach().item(),
         "mean_mp_attn_row_std": mean_mp_attn_row_std.detach().item(),
     })

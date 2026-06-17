@@ -42,6 +42,7 @@ LEARNED_METHOD_SPECS = {
     "rgcf": LearnedMethodSpec("rgcf", "RGCF", "RGCF", "rgcf", "phase1r_rgcf"),
     "me-a0": LearnedMethodSpec("me-a0", "ME-RGCF-A0", "ME_RGCF_A0", "me_rgcf_a0", "me_rgcf_a0"),
     "me-a0-dir": LearnedMethodSpec("me-a0-dir", "ME-RGCF-A0D", "ME_RGCF_A0D", "me_rgcf_a0_dir", "me_rgcf_a0_dir"),
+    "me-a0-dir-hs": LearnedMethodSpec("me-a0-dir-hs", "ME-RGCF-A0D-HS", "ME_RGCF_A0D_HS", "me_rgcf_a0_dir_hs", "me_rgcf_a0_dir_hs"),
 }
 LEARNED_METHODS = [LEARNED_METHOD_SPECS["rgcf"].display_name]
 
@@ -101,6 +102,8 @@ def parse_methods(text: str | None) -> List[LearnedMethodSpec]:
             key = "me-a0"
         if key in {"me_a0_dir", "me-a0d", "me_a0d"}:
             key = "me-a0-dir"
+        if key in {"me_a0_dir_hs", "me-a0d-hs", "me_a0d_hs", "a0d-hs"}:
+            key = "me-a0-dir-hs"
         if key not in LEARNED_METHOD_SPECS:
             allowed = ", ".join(sorted(LEARNED_METHOD_SPECS))
             raise ValueError(f"Unknown --methods entry '{part}'. Allowed: {allowed}")

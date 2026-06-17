@@ -9,7 +9,7 @@ from torch.utils.data import ConcatDataset, Dataset
 from core.types import ExperimentBundle
 from .builders import FeatureBundle, build_feature_bundle_from_sim
 
-PHASE1R_TRACK_RELIABILITY_MODELS = {"phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir"}
+PHASE1R_TRACK_RELIABILITY_MODELS = {"phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir", "me_rgcf_a0_dir_hs"}
 
 
 class FusionTimeStepDataset(Dataset):
