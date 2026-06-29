@@ -19,12 +19,43 @@ run unless requested with `--methods`.
 ## Active Documents
 
 ```text
+docs/PAPER_FRAMING_CONSTRAINTS_CN.md
 docs/CURRENT_MAINLINE_CN.md
 docs/NEXT_WINDOW_HANDOFF_CN.md
 docs/PHASE1R_RGCF_GPU_EXPERIMENT_PLAN_CN.md
 docs/ME_RGCF_HETEROGENEOUS_TEMPORAL_DESIGN_CN.md
 docs/PHASE2_ME_A0D_GPU_EXECUTION_PLAN_CN.md
 ```
+
+## Paper Framing Constraint
+
+When summarizing this project as a paper, do not present the internal model
+iteration path as the research contribution. The paper should promote one final
+method. Earlier variants are only baselines, ablations, or diagnostic evidence.
+
+Final paper method:
+
+```text
+Paper name: EHGCF, Evidence-aware Heterogeneous Graph Calibrated Fusion
+Chinese name: 证据感知异构图校准融合方法
+Internal implementation: ME-RGCF-A0D
+```
+
+`RGCF`, `ME-RGCF-A0`, and `ME-RGCF-A0D-HS` are process variants for baselines,
+ablations, or diagnostics. They must not be framed as the paper's final method
+or as contribution names.
+
+The paper contribution framing is constrained to three points:
+
+- joint use of posterior state information, track measurement residuals, and
+  external measurement evidence;
+- a role-aware heterogeneous GNN over posterior nodes and measurement/evidence
+  nodes;
+- an improved calibrated information-fusion formula combining node weights,
+  reliability gates, and covariance scaling.
+
+See `docs/PAPER_FRAMING_CONSTRAINTS_CN.md` before writing paper summaries,
+slides, abstracts, or contribution lists.
 
 ## Current Framing
 
@@ -42,9 +73,9 @@ formula as weighted states.
 
 Current executable methods:
 
-- `RGCF`: default learned method.
-- `ME-RGCF-A0`: optional Phase2 minimal heterogeneous graph method.
-- `ME-RGCF-A0D`: optional Phase2 directional pair-aware graph method.
+- `RGCF`: process variant; learned baseline / ablation.
+- `ME-RGCF-A0`: process variant; minimal heterogeneous graph ablation.
+- `ME-RGCF-A0D`: final implementation for the paper method `EHGCF`.
 
 Current benchmark entry:
 

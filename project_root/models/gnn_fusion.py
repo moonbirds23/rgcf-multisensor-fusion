@@ -157,7 +157,7 @@ class OriginalGNNFusion(_GraphFusionCore):
         super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
         self.node_enc = nn.Sequential(nn.Linear(in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
 
-    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None):
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None, mp_pair_feat=None):
         h1, a = self._graph(self.node_enc(post_feat))
         raw = self.node_logit(h1).squeeze(-1)
         return self._decode(post_feat, h1, mask, raw, return_weights, {"attn_matrix": a})
@@ -527,6 +527,7 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
         weight_uniform_mix=0.02,
         cov_calib_min_scale=1.0,
         cov_calib_max_scale=25.0,
+        use_cov_in_fusion=True,
         cov_weight_beta=0.35,
         use_mm_attention=True,
         use_mp_attention=True,
@@ -541,6 +542,7 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
         self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
         self.cov_calib_min_scale = float(cov_calib_min_scale)
         self.cov_calib_max_scale = float(cov_calib_max_scale)
+        self.use_cov_in_fusion = bool(use_cov_in_fusion)
         self.cov_weight_beta = float(cov_weight_beta)
         self.use_mm_attention = bool(use_mm_attention)
         self.use_mp_attention = bool(use_mp_attention)
@@ -702,7 +704,7 @@ class MeasurementEvaluatedRGCFA0(_GraphFusionCore):
             reliability_logits,
             return_weights,
             aux,
-            cov_scale=cov_scale,
+            cov_scale=cov_scale if self.use_cov_in_fusion else None,
             weight_uniform_mix=self.weight_uniform_mix,
         )
 
@@ -729,6 +731,7 @@ class MeasurementEvaluatedRGCFA0Directional(MeasurementEvaluatedRGCFA0):
         weight_uniform_mix=0.02,
         cov_calib_min_scale=1.0,
         cov_calib_max_scale=25.0,
+        use_cov_in_fusion=True,
         cov_weight_beta=0.35,
         use_mm_attention=True,
         use_mp_attention=True,
@@ -753,6 +756,7 @@ class MeasurementEvaluatedRGCFA0Directional(MeasurementEvaluatedRGCFA0):
             weight_uniform_mix=weight_uniform_mix,
             cov_calib_min_scale=cov_calib_min_scale,
             cov_calib_max_scale=cov_calib_max_scale,
+            use_cov_in_fusion=use_cov_in_fusion,
             cov_weight_beta=cov_weight_beta,
             use_mm_attention=use_mm_attention,
             use_mp_attention=use_mp_attention,

@@ -39,9 +39,12 @@ class LearnedMethodSpec:
 
 
 LEARNED_METHOD_SPECS = {
+    "posterior-only": LearnedMethodSpec("posterior-only", "Posterior-only", "Posterior_only", "posterior_only", "original_gnn_fusion"),
     "rgcf": LearnedMethodSpec("rgcf", "RGCF", "RGCF", "rgcf", "phase1r_rgcf"),
     "me-a0": LearnedMethodSpec("me-a0", "ME-RGCF-A0", "ME_RGCF_A0", "me_rgcf_a0", "me_rgcf_a0"),
     "me-a0-dir": LearnedMethodSpec("me-a0-dir", "ME-RGCF-A0D", "ME_RGCF_A0D", "me_rgcf_a0_dir", "me_rgcf_a0_dir"),
+    "ehgcf": LearnedMethodSpec("ehgcf", "EHGCF", "EHGCF", "me_rgcf_a0_dir", "me_rgcf_a0_dir"),
+    "ehgcf-no-calib": LearnedMethodSpec("ehgcf-no-calib", "EHGCF w/o calibrated fusion", "EHGCF_no_calibrated_fusion", "ehgcf_no_calibrated_fusion", "me_rgcf_a0_dir"),
     "me-a0-dir-hs": LearnedMethodSpec("me-a0-dir-hs", "ME-RGCF-A0D-HS", "ME_RGCF_A0D_HS", "me_rgcf_a0_dir_hs", "me_rgcf_a0_dir_hs"),
 }
 LEARNED_METHODS = [LEARNED_METHOD_SPECS["rgcf"].display_name]
@@ -100,8 +103,12 @@ def parse_methods(text: str | None) -> List[LearnedMethodSpec]:
             continue
         if key == "me_a0":
             key = "me-a0"
+        if key in {"posterior_only", "post-only", "post_only"}:
+            key = "posterior-only"
         if key in {"me_a0_dir", "me-a0d", "me_a0d"}:
             key = "me-a0-dir"
+        if key in {"ehgcf_no_calib", "ehgcf-no-calibrated-fusion", "ehgcf_no_calibrated_fusion", "no-calib"}:
+            key = "ehgcf-no-calib"
         if key in {"me_a0_dir_hs", "me-a0d-hs", "me_a0d_hs", "a0d-hs"}:
             key = "me-a0-dir-hs"
         if key not in LEARNED_METHOD_SPECS:
@@ -174,10 +181,6 @@ def build_learned_bundle(
     configure_seed_ranges(bundle, seed_ranges)
     bundle.train.model_seed = int(model_seed)
     bundle.model.model_name = method.model_name
-    bundle.model.use_post_stream = True
-    bundle.model.use_meas_stream = True
-    bundle.model.use_gate = True
-    bundle.model.output_fusion_mode = "info_diag"
     bundle.identity.model_name = bundle.model.model_name
     if smoke_duration is not None:
         bundle.scenario.motion.T = float(smoke_duration)
@@ -682,10 +685,10 @@ def save_plan(
                 "profile": "smoke" if smoke else "formal",
             })
     plan = {
-        "benchmark": "Phase1R RGCF Corrected 3-Track 2-Evidence Benchmark",
+        "benchmark": "Phase1R EHGCF Paper Benchmark",
         "scenes": [asdict(s) for s in scenes],
         "methods": RULE_METHODS + [m.display_name for m in learned_methods],
-        "main_method": "RGCF",
+        "main_method": "EHGCF",
         "sensor_protocol": "T1/T2/T3 are posterior track sensors; E1/E2 are measurement evidence only.",
         "training_protocol": "single S1R/S2R mixed train/val store; evaluate separately on S1R and S2R",
         "rule_baselines": RULE_METHODS,
@@ -717,7 +720,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run Phase1R RGCF corrected GPU benchmark.")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--smoke", action="store_true")
-    p.add_argument("--methods", default="rgcf", help="Learned methods to run: rgcf, me-a0, me-a0-dir, or a comma-separated list. Rule baselines always run.")
+    p.add_argument("--methods", default="rgcf", help="Learned methods to run: posterior-only, rgcf, me-a0, me-a0-dir, ehgcf, ehgcf-no-calib, me-a0-dir-hs, or a comma-separated list. Rule baselines always run.")
     p.add_argument("--out-dir", default=str(PROJECT_ROOT / "results" / "phase1r_rgcf_compare"))
     p.add_argument("--dataset-store-root", default=str(PROJECT_ROOT / "dataset_store"))
     p.add_argument("--scenario-presets", default=None)

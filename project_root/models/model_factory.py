@@ -70,6 +70,7 @@ def build_model_from_bundle(bundle: ExperimentBundle):
             weight_uniform_mix=float(getattr(bundle.model, "weight_uniform_mix", 0.02)),
             cov_calib_min_scale=float(bundle.model.cov_calib_min_scale),
             cov_calib_max_scale=float(bundle.model.cov_calib_max_scale),
+            use_cov_in_fusion=bool(getattr(bundle.model, "use_cov_in_fusion", True)),
             cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.35)),
             **common,
         )
@@ -87,6 +88,7 @@ def build_model_from_bundle(bundle: ExperimentBundle):
             weight_uniform_mix=float(getattr(bundle.model, "weight_uniform_mix", 0.02)),
             cov_calib_min_scale=float(bundle.model.cov_calib_min_scale),
             cov_calib_max_scale=float(bundle.model.cov_calib_max_scale),
+            use_cov_in_fusion=bool(getattr(bundle.model, "use_cov_in_fusion", True)),
             cov_weight_beta=float(getattr(bundle.model, "cov_weight_beta", 0.35)),
             use_mm_attention=bool(getattr(bundle.model, "me_rgcf_use_mm_attention", True)),
             use_mp_attention=bool(getattr(bundle.model, "me_rgcf_use_mp_attention", True)),
