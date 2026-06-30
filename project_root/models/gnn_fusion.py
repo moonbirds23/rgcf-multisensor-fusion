@@ -163,6 +163,77 @@ class OriginalGNNFusion(_GraphFusionCore):
         return self._decode(post_feat, h1, mask, raw, return_weights, {"attn_matrix": a})
 
 
+class PosteriorCalibratedGNN(_GraphFusionCore):
+    """Posterior-only graph with reliability-gated covariance-calibrated fusion."""
+
+    def __init__(
+        self,
+        in_dim=9,
+        hidden_dim=64,
+        gate_hidden_dim=64,
+        valid_idx=8,
+        pos_scale=1000.0,
+        vel_scale=30.0,
+        gate_init_bias=0.5,
+        gate_weight_alpha=1.0,
+        gate_eps=1e-4,
+        base_logit_temperature=1.5,
+        weight_uniform_mix=0.02,
+        cov_calib_min_scale=1.0,
+        cov_calib_max_scale=25.0,
+        use_cov_in_fusion=True,
+        cov_weight_beta=0.35,
+        output_fusion_mode="info_diag",
+    ):
+        super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
+        self.gate_weight_alpha = float(gate_weight_alpha)
+        self.gate_eps = float(gate_eps)
+        self.base_logit_temperature = max(float(base_logit_temperature), 1e-6)
+        self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
+        self.cov_calib_min_scale = float(cov_calib_min_scale)
+        self.cov_calib_max_scale = float(cov_calib_max_scale)
+        self.use_cov_in_fusion = bool(use_cov_in_fusion)
+        self.cov_weight_beta = float(cov_weight_beta)
+
+        self.node_enc = nn.Sequential(nn.Linear(in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.reliability_head = nn.Sequential(nn.Linear(hidden_dim, gate_hidden_dim), nn.ReLU(), nn.Linear(gate_hidden_dim, 1))
+        self.cov_calib = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        nn.init.constant_(self.reliability_head[-1].bias, float(gate_init_bias))
+
+    def forward(self, post_feat, mask=None, meas_feat=None, return_weights=False, post_win=None, meas_win=None, evidence_feat=None, evidence_mask=None, mp_pair_feat=None):
+        h1, a = self._graph(self.node_enc(post_feat))
+        valid = post_feat[..., self.valid_idx]
+        reliability_soft = torch.sigmoid(self.reliability_head(h1).squeeze(-1))
+        reliability = reliability_soft * valid
+        cov_scale = (self.cov_calib_min_scale + F.softplus(self.cov_calib(h1).squeeze(-1))).clamp(max=self.cov_calib_max_scale)
+        base_logits = self.node_logit(h1).squeeze(-1) / self.base_logit_temperature
+        reliability_bias = self.gate_weight_alpha * torch.log(reliability.clamp_min(self.gate_eps))
+        cov_bias = -self.cov_weight_beta * torch.log(cov_scale.clamp_min(self.gate_eps))
+        reliability_logits = base_logits + reliability_bias + cov_bias
+        aux = {
+            "attn_matrix": a,
+            "gate": reliability,
+            "gate_soft": reliability_soft,
+            "reliability": reliability,
+            "base_weight_logits": base_logits,
+            "raw_weight_logits": reliability_logits,
+            "gate_weight_bias": reliability_bias,
+            "cov_weight_bias": cov_bias,
+            "reliability_logits": reliability_logits,
+            "cov_scale": cov_scale,
+        }
+        return self._decode(
+            post_feat,
+            h1,
+            mask,
+            reliability_logits,
+            return_weights,
+            aux,
+            cov_scale=cov_scale if self.use_cov_in_fusion else None,
+            weight_uniform_mix=self.weight_uniform_mix,
+        )
+
+
 class PostMeasDirectFusion(_GraphFusionCore):
     def __init__(self, post_in_dim=9, meas_in_dim=18, hidden_dim=64, meas_hidden_dim=64, valid_idx=8, pos_scale=1000.0, vel_scale=30.0, output_fusion_mode="info_diag"):
         super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
@@ -413,6 +484,7 @@ class Phase1RRGCF(_GraphFusionCore):
         weight_uniform_mix=0.02,
         cov_calib_min_scale=1.0,
         cov_calib_max_scale=25.0,
+        use_cov_in_fusion=True,
         cov_weight_beta=0.35,
         output_fusion_mode="info_diag",
     ):
@@ -423,6 +495,7 @@ class Phase1RRGCF(_GraphFusionCore):
         self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
         self.cov_calib_min_scale = float(cov_calib_min_scale)
         self.cov_calib_max_scale = float(cov_calib_max_scale)
+        self.use_cov_in_fusion = bool(use_cov_in_fusion)
         self.cov_weight_beta = float(cov_weight_beta)
 
         self.post_enc = nn.Sequential(nn.Linear(post_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
@@ -501,7 +574,7 @@ class Phase1RRGCF(_GraphFusionCore):
             reliability_logits,
             return_weights,
             aux,
-            cov_scale=cov_scale,
+            cov_scale=cov_scale if self.use_cov_in_fusion else None,
             weight_uniform_mix=self.weight_uniform_mix,
         )
 

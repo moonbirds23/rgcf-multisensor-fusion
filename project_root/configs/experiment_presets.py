@@ -313,6 +313,52 @@ def _phase1r_posterior_only(model: ModelConfig) -> ModelConfig:
     return out
 
 
+def _phase1r_posterior_only_calibrated(model: ModelConfig) -> ModelConfig:
+    out = deepcopy(model)
+    out.model_name = "posterior_calibrated_gnn"
+    out.use_post_stream = True
+    out.use_meas_stream = False
+    out.use_gate = False
+    out.output_fusion_mode = "info_diag"
+    out.post_in_dim = 9
+    out.base_logit_temperature = 1.5
+    out.weight_uniform_mix = 0.02
+    out.gate_init_bias = 0.5
+    out.gate_weight_alpha = 1.0
+    out.use_cov_calibration = True
+    out.use_cov_in_fusion = True
+    out.cov_weight_beta = 0.35
+    out.cov_calib_min_scale = 1.0
+    out.cov_calib_max_scale = 25.0
+    out.cov_prior_weight = 0.001
+    out.use_gate_supervision = True
+    out.use_balanced_gate_loss = False
+    out.gate_supervision_weight = 0.03
+    out.gate_prior_weight = 0.001
+    out.gate_prior_mean = 0.70
+    out.normal_gate_target = 0.9
+    out.fault_gate_target = 0.1
+    out.track_reliability_tau = 20.0
+    out.rgcf_tail_loss_weight = 0.02
+    out.rgcf_tail_error_scale = 25.0
+    out.fusion_variant = "Posterior-only calibrated information fusion"
+    return out
+
+
+def _phase1r_ehgcf_no_external_evidence(model: ModelConfig) -> ModelConfig:
+    out = _phase1r_me_rgcf_a0_dir(model)
+    out.use_external_evidence = False
+    out.fusion_variant = "EHGCF ablation without external evidence-only nodes"
+    return out
+
+
+def _phase1r_ehgcf_no_heterogeneous_gnn(model: ModelConfig) -> ModelConfig:
+    out = _phase1r_rgcf(model)
+    out.model_name = "phase1r_rgcf"
+    out.fusion_variant = "EHGCF ablation without heterogeneous P/M graph interaction"
+    return out
+
+
 def _phase1r_ehgcf_no_calibrated_fusion(model: ModelConfig) -> ModelConfig:
     out = _phase1r_me_rgcf_a0_dir(model)
     out.model_name = "me_rgcf_a0_dir"
@@ -423,12 +469,18 @@ def build_experiment_config(preset_name: str) -> ExperimentConfig:
         table[scene_name] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
         table[f"{scene_name}_posterior_only"] = (_clean_fault(), _phase1r_posterior_only(model), scene_name)
         table[f"{scene_name}_posterior_only_smoke"] = (_clean_fault(), _phase1r_posterior_only(model), scene_name)
+        table[f"{scene_name}_posterior_only_calib"] = (_clean_fault(), _phase1r_posterior_only_calibrated(model), scene_name)
+        table[f"{scene_name}_posterior_only_calib_smoke"] = (_clean_fault(), _phase1r_posterior_only_calibrated(model), scene_name)
         table[f"{scene_name}_rgcf"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
         table[f"{scene_name}_rgcf_smoke"] = (_clean_fault(), _phase1r_rgcf(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_dir"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_dir_smoke"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir(model), scene_name)
+        table[f"{scene_name}_ehgcf_no_external_evidence"] = (_clean_fault(), _phase1r_ehgcf_no_external_evidence(model), scene_name)
+        table[f"{scene_name}_ehgcf_no_external_evidence_smoke"] = (_clean_fault(), _phase1r_ehgcf_no_external_evidence(model), scene_name)
+        table[f"{scene_name}_ehgcf_no_heterogeneous_gnn"] = (_clean_fault(), _phase1r_ehgcf_no_heterogeneous_gnn(model), scene_name)
+        table[f"{scene_name}_ehgcf_no_heterogeneous_gnn_smoke"] = (_clean_fault(), _phase1r_ehgcf_no_heterogeneous_gnn(model), scene_name)
         table[f"{scene_name}_ehgcf_no_calibrated_fusion"] = (_clean_fault(), _phase1r_ehgcf_no_calibrated_fusion(model), scene_name)
         table[f"{scene_name}_ehgcf_no_calibrated_fusion_smoke"] = (_clean_fault(), _phase1r_ehgcf_no_calibrated_fusion(model), scene_name)
         table[f"{scene_name}_me_rgcf_a0_dir_hs"] = (_clean_fault(), _phase1r_me_rgcf_a0_dir_hs(model), scene_name)

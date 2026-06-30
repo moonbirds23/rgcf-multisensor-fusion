@@ -31,6 +31,7 @@ class ModelConfig:
     me_rgcf_hs_spread_full_q: float = 0.90
     me_rgcf_hs_min_gate: float = 0.0
     me_rgcf_hs_evidence_temperature: float = 1.0
+    use_external_evidence: bool = True
     hidden_dim: int = 64
     meas_hidden_dim: int = 64
     gate_hidden_dim: int = 64

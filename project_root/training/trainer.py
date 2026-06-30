@@ -496,7 +496,7 @@ def train_fusion_model(
                 model = torch.compile(model, mode=_mode)
                 # Eagerly trigger compilation on a dummy batch to catch
                 # lazy compilation errors (e.g. TritonMissing) early.
-                phase1r_models = {"phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir"}
+                phase1r_models = {"posterior_calibrated_gnn", "phase1r_rgcf", "me_rgcf_a0", "me_rgcf_a0_dir"}
                 model_name = str(getattr(bundle.model, "model_name", ""))
                 is_phase1r_model = model_name in phase1r_models
                 dummy_nodes = 3 if is_phase1r_model else 4

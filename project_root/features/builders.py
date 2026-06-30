@@ -28,5 +28,11 @@ def build_feature_bundle_from_sim(sim: Dict[str, np.ndarray], bundle: Experiment
     post = build_post_node_features_from_sim(sim, bundle)
     meas = build_meas_node_features_from_sim(sim, bundle) if bool(getattr(bundle.model, "use_meas_stream", False)) or bool(getattr(bundle.model, "use_gate", False)) or bool(getattr(bundle.model, "use_temporal", False)) else None
     evidence = build_evidence_node_features_from_sim(sim, bundle) if model_name in PHASE1R_EVIDENCE_MODELS else None
+    if evidence is not None and not bool(getattr(bundle.model, "use_external_evidence", True)):
+        evidence.node_feat[...] = 0.0
+        evidence.mask[...] = 0.0
     mp_pair = build_mp_pair_features_from_sim(sim, bundle) if model_name in PHASE1R_PAIR_MODELS else None
+    if mp_pair is not None and not bool(getattr(bundle.model, "use_external_evidence", True)):
+        mp_pair[..., 2:6] = 0.0
+        mp_pair[..., 7] = np.where(mp_pair[..., 0] > 0.5, mp_pair[..., 7], np.where(mp_pair[..., 1] > 0.5, mp_pair[..., 7], 0.0))
     return FeatureBundle(post=post, meas=meas, evidence=evidence, mp_pair=mp_pair, target=post.target, t=post.t)

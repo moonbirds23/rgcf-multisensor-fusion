@@ -40,10 +40,13 @@ class LearnedMethodSpec:
 
 LEARNED_METHOD_SPECS = {
     "posterior-only": LearnedMethodSpec("posterior-only", "Posterior-only", "Posterior_only", "posterior_only", "original_gnn_fusion"),
+    "posterior-only-calib": LearnedMethodSpec("posterior-only-calib", "Posterior-Only + Calib", "Posterior_only_calib", "posterior_only_calib", "posterior_calibrated_gnn"),
     "rgcf": LearnedMethodSpec("rgcf", "RGCF", "RGCF", "rgcf", "phase1r_rgcf"),
     "me-a0": LearnedMethodSpec("me-a0", "ME-RGCF-A0", "ME_RGCF_A0", "me_rgcf_a0", "me_rgcf_a0"),
     "me-a0-dir": LearnedMethodSpec("me-a0-dir", "ME-RGCF-A0D", "ME_RGCF_A0D", "me_rgcf_a0_dir", "me_rgcf_a0_dir"),
     "ehgcf": LearnedMethodSpec("ehgcf", "EHGCF", "EHGCF", "me_rgcf_a0_dir", "me_rgcf_a0_dir"),
+    "ehgcf-no-external": LearnedMethodSpec("ehgcf-no-external", "EHGCF w/o external evidence", "EHGCF_no_external_evidence", "ehgcf_no_external_evidence", "me_rgcf_a0_dir"),
+    "ehgcf-no-hetero-gnn": LearnedMethodSpec("ehgcf-no-hetero-gnn", "EHGCF w/o heterogeneous GNN", "EHGCF_no_heterogeneous_gnn", "ehgcf_no_heterogeneous_gnn", "phase1r_rgcf"),
     "ehgcf-no-calib": LearnedMethodSpec("ehgcf-no-calib", "EHGCF w/o calibrated fusion", "EHGCF_no_calibrated_fusion", "ehgcf_no_calibrated_fusion", "me_rgcf_a0_dir"),
     "me-a0-dir-hs": LearnedMethodSpec("me-a0-dir-hs", "ME-RGCF-A0D-HS", "ME_RGCF_A0D_HS", "me_rgcf_a0_dir_hs", "me_rgcf_a0_dir_hs"),
 }
@@ -105,8 +108,14 @@ def parse_methods(text: str | None) -> List[LearnedMethodSpec]:
             key = "me-a0"
         if key in {"posterior_only", "post-only", "post_only"}:
             key = "posterior-only"
+        if key in {"posterior_only_calib", "post-calib", "post_calib", "posterior-calib", "posterior_only_calibrated"}:
+            key = "posterior-only-calib"
         if key in {"me_a0_dir", "me-a0d", "me_a0d"}:
             key = "me-a0-dir"
+        if key in {"ehgcf_no_external", "ehgcf-no-external-evidence", "ehgcf_no_external_evidence", "no-external"}:
+            key = "ehgcf-no-external"
+        if key in {"ehgcf_no_hetero", "ehgcf-no-heterogeneous", "ehgcf_no_heterogeneous_gnn", "ehgcf-no-hetero", "no-hetero", "no-heterogeneous-gnn"}:
+            key = "ehgcf-no-hetero-gnn"
         if key in {"ehgcf_no_calib", "ehgcf-no-calibrated-fusion", "ehgcf_no_calibrated_fusion", "no-calib"}:
             key = "ehgcf-no-calib"
         if key in {"me_a0_dir_hs", "me-a0d-hs", "me_a0d_hs", "a0d-hs"}:
@@ -720,7 +729,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run Phase1R RGCF corrected GPU benchmark.")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--smoke", action="store_true")
-    p.add_argument("--methods", default="rgcf", help="Learned methods to run: posterior-only, rgcf, me-a0, me-a0-dir, ehgcf, ehgcf-no-calib, me-a0-dir-hs, or a comma-separated list. Rule baselines always run.")
+    p.add_argument("--methods", default="rgcf", help="Learned methods to run: posterior-only, posterior-only-calib, rgcf, me-a0, me-a0-dir, ehgcf, ehgcf-no-external, ehgcf-no-hetero-gnn, ehgcf-no-calib, me-a0-dir-hs, or a comma-separated list. Rule baselines always run unless --skip-rule-baselines is set.")
+    p.add_argument("--skip-rule-baselines", action="store_true", help="Skip traditional rule baselines. Useful when launching one learned method per parallel process.")
     p.add_argument("--out-dir", default=str(PROJECT_ROOT / "results" / "phase1r_rgcf_compare"))
     p.add_argument("--dataset-store-root", default=str(PROJECT_ROOT / "dataset_store"))
     p.add_argument("--scenario-presets", default=None)
@@ -816,20 +826,21 @@ def main() -> None:
     completed = {str(r.get("run_label")) for r in rows if r.get("status") == "ok"}
     baseline_done = {str(r.get("scenario_id")) for r in rows if r.get("method_category") == "rule_baseline" and r.get("status") == "ok"}
 
-    for scene in scenes:
-        if scene.scene_id in baseline_done:
-            continue
-        print(f"[rule_baselines] evaluating {scene.scene_id}")
-        baseline_rows = evaluate_rule_baselines(
-            scene=scene,
-            test_sims=scene_splits[scene.scene_id]["test"],
-            out_dir=out_dir,
-            seed_ranges=seed_ranges,
-        )
-        for row in baseline_rows:
-            row["dataset_dir"] = mixed_dataset_dir
-        rows.extend(baseline_rows)
-    save_run_outputs(rows, out_dir)
+    if not args.skip_rule_baselines:
+        for scene in scenes:
+            if scene.scene_id in baseline_done:
+                continue
+            print(f"[rule_baselines] evaluating {scene.scene_id}")
+            baseline_rows = evaluate_rule_baselines(
+                scene=scene,
+                test_sims=scene_splits[scene.scene_id]["test"],
+                out_dir=out_dir,
+                seed_ranges=seed_ranges,
+            )
+            for row in baseline_rows:
+                row["dataset_dir"] = mixed_dataset_dir
+            rows.extend(baseline_rows)
+        save_run_outputs(rows, out_dir)
 
     train_scene = scenes[0]
     total_learned_runs = len(learned_methods) * len(model_seeds)
