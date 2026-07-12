@@ -146,7 +146,7 @@ def main() -> None:
     if args.mode in {"ablation", "all"}:
         cmd = build_benchmark_command(
             python_exe=args.python_exe,
-            methods="posterior-only,rgcf,me-a0,ehgcf-no-calib,ehgcf",
+            methods="posterior-only,posterior-only-calib,ehgcf-no-external,ehgcf-no-hetero-gnn,ehgcf-no-calib,ehgcf",
             out_dir=ablation_dir,
             args=args,
             mixed_dataset_dir=mixed_dataset_dir,

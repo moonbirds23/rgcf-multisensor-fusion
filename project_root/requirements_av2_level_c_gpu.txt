@@ -1,0 +1,12 @@
+# Non-PyTorch dependencies for AV2 V3.1 Level C on the GPU host.
+# Install a CUDA-enabled PyTorch wheel separately, matched to the host driver.
+numpy==1.22.0
+scipy==1.10.1
+matplotlib==3.7.5
+pandas==2.0.3
+scikit-learn==1.3.2
+pyarrow==17.0.0
+av2==0.2.1
+universal_pathlib==0.2.6
+fsspec==2024.10.0
+opencv-python==4.10.0.84

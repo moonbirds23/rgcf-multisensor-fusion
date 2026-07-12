@@ -1,0 +1,15 @@
+protocol_name: AV2_NOMINAL_1000_V3.1
+condition: nominal
+measurement_seeds: [100, 101, 102]
+warmup_seconds: 1.0
+conditions:
+  nominal_only: true
+  enable_bias: false
+  enable_drift: false
+  enable_noise_burst: false
+  enable_dropout: false
+  enable_delay: false
+  enable_covariance_mismatch: false
+  enable_fault_sampling: false
+  active_conditions: [nominal]
+  fault_probability: 0.0

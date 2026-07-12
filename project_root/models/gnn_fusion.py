@@ -19,6 +19,25 @@ def _fuse_info_diag(xhat: torch.Tensor, pdiag: torch.Tensor, w: torch.Tensor) ->
     return (wy * xhat).sum(1) / wy.sum(1).clamp_min(eps)
 
 
+def _fuse_info_diag_with_cov(
+    xhat: torch.Tensor,
+    pdiag: torch.Tensor,
+    w: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fuse diagonal Gaussian posteriors and return the reported covariance.
+
+    The mean intentionally delegates to :func:`_fuse_info_diag` so enabling
+    covariance reporting cannot change the established ``info_diag``
+    prediction.  The covariance follows the same diagonal information sum:
+    ``P_fused[d] = 1 / sum_i(w_i / P_i[d])``.
+    """
+    eps = 1e-6
+    pred = _fuse_info_diag(xhat, pdiag, w)
+    information = w[:, None] / pdiag.clamp_min(eps) if xhat.dim() == 2 else w.unsqueeze(-1) / pdiag.clamp_min(eps)
+    fused_cov_diag = 1.0 / information.sum(dim=0 if xhat.dim() == 2 else 1).clamp_min(eps)
+    return pred, fused_cov_diag
+
+
 def _fuse_aa(xhat: torch.Tensor, w: torch.Tensor, active: torch.Tensor) -> torch.Tensor:
     eps = 1e-6
     ww = w * active
@@ -138,7 +157,8 @@ class _GraphFusionCore(FusionModelBase):
         if cov_scale is not None:
             pdiag = pdiag * cov_scale.clamp_min(1e-6).unsqueeze(-1)
         if self.output_fusion_mode == "info_diag":
-            pred = _fuse_info_diag(xhat, pdiag, w)
+            pred, fused_cov_diag = _fuse_info_diag_with_cov(xhat, pdiag, w)
+            aux = {"fused_cov_diag": fused_cov_diag, **aux}
         elif self.output_fusion_mode == "aa":
             pred = _fuse_aa(xhat, w, active)
         elif self.output_fusion_mode == "aa_mm":
