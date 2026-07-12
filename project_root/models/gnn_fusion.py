@@ -509,13 +509,13 @@ class Phase1RRGCF(_GraphFusionCore):
         output_fusion_mode="info_diag",
     ):
         super().__init__(hidden_dim, valid_idx, pos_scale, vel_scale, output_fusion_mode)
+        self.use_cov_in_fusion = bool(use_cov_in_fusion)
         self.gate_weight_alpha = float(gate_weight_alpha)
         self.gate_eps = float(gate_eps)
         self.base_logit_temperature = max(float(base_logit_temperature), 1e-6)
         self.weight_uniform_mix = max(float(weight_uniform_mix), 0.0)
         self.cov_calib_min_scale = float(cov_calib_min_scale)
         self.cov_calib_max_scale = float(cov_calib_max_scale)
-        self.use_cov_in_fusion = bool(use_cov_in_fusion)
         self.cov_weight_beta = float(cov_weight_beta)
 
         self.post_enc = nn.Sequential(nn.Linear(post_in_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())

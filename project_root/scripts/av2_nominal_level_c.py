@@ -147,10 +147,28 @@ def run_gpu(root: Path, count: int, epochs: int, batch_size: int, model_seed: in
         if not torch.isfinite(output.pred).all() or not torch.isfinite(loss):
             raise RuntimeError("non-finite Level C prediction or loss")
         loss.backward()
-        grads = [parameter.grad for parameter in model.parameters() if parameter.requires_grad]
-        if not all(gradient is not None and torch.isfinite(gradient).all() for gradient in grads):
-            raise RuntimeError("non-finite Level C gradient")
-        nonzero_gradients += sum(bool(torch.count_nonzero(gradient)) for gradient in grads if gradient is not None)
+        _GRAD_NONE_WHITELIST = {
+            "attn.0.weight", "attn.0.bias", "attn.2.weight", "attn.2.bias",
+            "upd.0.weight", "upd.0.bias", "upd.2.weight", "upd.2.bias",
+        }
+        for _name, _p in model.named_parameters():
+            if not _p.requires_grad:
+                continue
+            if _p.grad is None:
+                if _name not in _GRAD_NONE_WHITELIST:
+                    raise RuntimeError(f"unexpected None gradient: {_name}")
+                continue
+            if not torch.isfinite(_p.grad).all():
+                raise RuntimeError(f"non-finite gradient: {_name}")
+        active_grads = [
+            _p.grad for _name, _p in model.named_parameters()
+            if _p.requires_grad and _p.grad is not None
+        ]
+        if not active_grads:
+            raise RuntimeError("no parameters with finite gradients in Level C smoke")
+        nonzero_gradients += sum(
+            bool(torch.count_nonzero(g)) for g in active_grads
+        )
         optimizer.step(); smoke_losses.append(float(loss.detach().item()))
         if index == 1:
             break
