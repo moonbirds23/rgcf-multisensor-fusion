@@ -7,11 +7,12 @@ from typing import Any
 
 import numpy as np
 
+from configs.av2_config import Av2PilotProtocol
 from configs.av2_nominal_1000_v1 import NOMINAL_PROTOCOL, WARMUP_SECONDS
 from data.av2.feature_builder import build_av2_feature_arrays
 from simulation.av2_sensor_ekf import AV2SensorEkfOutputs, SensorMeasurement, run_av2_sensor_ekfs
 
-from .common import PROTOCOL_NAME, atomic_json, atomic_npz, marker, read_csv, stable_seed
+from .common import ArtifactConflictError, PROTOCOL_NAME, atomic_json, atomic_npz, marker, read_csv, stable_seed
 
 
 def _manifest_rows(manifest_dir: Path, split: str) -> list[dict[str, str]]:
@@ -61,32 +62,118 @@ def load_outputs(path: Path) -> tuple[AV2SensorEkfOutputs, np.ndarray]:
     return AV2SensorEkfOutputs(data["timestamps_ns"], data["posterior_mean"], data["posterior_covariance_internal"], data["posterior_covariance_reported"], data["posterior_available"], data["posterior_measurement_valid"], data["evidence_valid"], tuple(records)), data["target"]
 
 
-def build_sim(manifest_dir: Path, truth_root: Path, output_root: Path, train_global_seed: int = 20260711, splits: tuple[str, ...] = ("train", "validation", "test")) -> dict[str, int]:
+def build_sim(
+    manifest_dir: Path,
+    truth_root: Path,
+    output_root: Path,
+    train_global_seed: int = 20260711,
+    splits: tuple[str, ...] = ("train", "validation", "test"),
+    *,
+    protocol: Av2PilotProtocol = NOMINAL_PROTOCOL,
+    protocol_name: str = PROTOCOL_NAME,
+    config_sha256: str = "legacy-unspecified",
+    scenario_scoped_rng: bool = False,
+) -> dict[str, int]:
+    """Build nominal simulations without ever overwriting existing records.
+
+    V3.1 keeps the historical seed behavior by default.  Corrected protocols
+    set ``scenario_scoped_rng=True`` so a public measurement-seed label is
+    deterministically namespaced by scenario before initializing NumPy's RNG.
+    """
     counts: dict[str, int] = {}
     for split in splits:
-        rows = _manifest_rows(manifest_dir, split); seeds = None
+        rows = _manifest_rows(manifest_dir, split)
         for row in rows:
             seed_list = [stable_seed(row["scenario_id"], train_global_seed)] if split == "train" else ([100] if split == "validation" else [100, 101, 102])
             for seed in seed_list:
                 path = _sim_path(output_root, split, row["scenario_id"], seed)
-                if path.exists(): continue
+                if path.exists():
+                    if scenario_scoped_rng or protocol_name != PROTOCOL_NAME:
+                        with np.load(path, allow_pickle=False) as existing:
+                            expected_rng_seed = stable_seed(
+                                protocol_name, row["scenario_id"], seed, "measurement"
+                            )
+                            compatible = (
+                                "protocol_name" in existing.files
+                                and "config_sha256" in existing.files
+                                and "rng_seed" in existing.files
+                                and str(existing["protocol_name"]) == protocol_name
+                                and str(existing["config_sha256"]) == config_sha256
+                                and int(existing["rng_seed"]) == expected_rng_seed
+                            )
+                        if not compatible:
+                            raise ArtifactConflictError(
+                                f"existing simulation cache violates requested protocol: {path}"
+                            )
+                    continue
                 with np.load(_truth_path(truth_root, split, row["scenario_id"]), allow_pickle=False) as truth: timestamps, target = truth["timestamps_ns"], truth["target"]
-                result = run_av2_sensor_ekfs(timestamps, target, rng=np.random.default_rng(seed), protocol=NOMINAL_PROTOCOL)
-                atomic_npz(path, {**_serialize(result, target), "scenario_id": np.asarray(row["scenario_id"]), "experiment_split": np.asarray(split), "measurement_seed": np.asarray(seed), "protocol_name": np.asarray(PROTOCOL_NAME)})
+                rng_seed = (
+                    stable_seed(protocol_name, row["scenario_id"], seed, "measurement")
+                    if scenario_scoped_rng
+                    else seed
+                )
+                result = run_av2_sensor_ekfs(
+                    timestamps,
+                    target,
+                    rng=np.random.default_rng(rng_seed),
+                    protocol=protocol,
+                )
+                atomic_npz(
+                    path,
+                    {
+                        **_serialize(result, target),
+                        "scenario_id": np.asarray(row["scenario_id"]),
+                        "experiment_split": np.asarray(split),
+                        "measurement_seed": np.asarray(seed),
+                        "rng_seed": np.asarray(rng_seed),
+                        "protocol_name": np.asarray(protocol_name),
+                        "config_sha256": np.asarray(config_sha256),
+                    },
+                )
         counts[split] = len(list((output_root / split).rglob("seed_*.npz")))
-    marker(output_root, {"stage": "sim", "counts": counts, "condition": "nominal", "fault_variants_generated": 0}); return counts
+    marker(
+        output_root,
+        {
+            "stage": "sim",
+            "counts": counts,
+            "condition": "nominal",
+            "fault_variants_generated": 0,
+            "config_sha256": config_sha256,
+            "scenario_scoped_rng": scenario_scoped_rng,
+        },
+        protocol_name=protocol_name,
+    )
+    return counts
 
 
-def build_feature_shards(manifest_dir: Path, sim_root: Path, output_root: Path, scenarios_per_shard: int = 100, splits: tuple[str, ...] = ("train", "validation", "test")) -> dict[str, int]:
+def build_feature_shards(
+    manifest_dir: Path,
+    sim_root: Path,
+    output_root: Path,
+    scenarios_per_shard: int = 100,
+    splits: tuple[str, ...] = ("train", "validation", "test"),
+    *,
+    protocol: Av2PilotProtocol = NOMINAL_PROTOCOL,
+    protocol_name: str = PROTOCOL_NAME,
+    config_sha256: str = "legacy-unspecified",
+    warmup_seconds: float = WARMUP_SECONDS,
+) -> dict[str, int]:
     result: dict[str, int] = {}
     for split in splits:
         refs = sorted((sim_root / split).rglob("seed_*.npz")); result[split] = 0
         for shard_number, group_start in enumerate(range(0, len(refs), scenarios_per_shard)):
             group = refs[group_start:group_start + scenarios_per_shard]; shard = output_root / split / ("shard_%03d" % shard_number)
-            if (shard / "_SUCCESS").exists(): result[split] += len(group); continue
+            if (shard / "_SUCCESS").exists():
+                if protocol_name != PROTOCOL_NAME:
+                    success = json.loads((shard / "_SUCCESS").read_text(encoding="utf-8"))
+                    if success.get("protocol_name") != protocol_name or success.get("config_sha256") != config_sha256:
+                        raise ArtifactConflictError(
+                            f"existing feature shard violates requested protocol: {shard}"
+                        )
+                result[split] += len(group); continue
             arrays: dict[str, list[np.ndarray]] = {key: [] for key in ("post_feat", "meas_feat", "evidence_feat", "evidence_mask", "mp_pair_feat", "mask", "target", "eval_mask", "true_post_error", "reported_pdiag")}; offsets, index = [0], []
             for path in group:
-                outputs, target = load_outputs(path); feature = build_av2_feature_arrays(outputs, target, warmup_seconds=WARMUP_SECONDS, protocol=NOMINAL_PROTOCOL)
+                outputs, target = load_outputs(path); feature = build_av2_feature_arrays(outputs, target, warmup_seconds=warmup_seconds, protocol=protocol)
                 post_error = np.linalg.norm(outputs.posterior_mean[:, :, :2] - target[:, None, :2], axis=2).copy(); post_error[~outputs.posterior_available] = 0.0
                 pdiag = np.diagonal(outputs.posterior_covariance_reported, axis1=2, axis2=3).copy(); pdiag[~np.isfinite(pdiag)] = 0.0
                 values = {"post_feat": feature.post_feat, "meas_feat": feature.meas_feat, "evidence_feat": feature.evidence_feat, "evidence_mask": feature.evidence_mask, "mp_pair_feat": feature.mp_pair_feat, "mask": feature.post_mask, "target": feature.target, "eval_mask": feature.eval_mask, "true_post_error": post_error, "reported_pdiag": pdiag}
@@ -97,6 +184,6 @@ def build_feature_shards(manifest_dir: Path, sim_root: Path, output_root: Path, 
             for key, parts in arrays.items(): np.save(shard / (key + ".npy"), np.concatenate(parts, axis=0))
             np.save(shard / "scenario_offsets.npy", np.asarray(offsets, dtype=np.int64))
             (shard / "index.jsonl").write_text("".join(json.dumps(row) + "\n" for row in index), encoding="utf-8")
-            atomic_json(shard / "metadata.json", {"protocol_name": PROTOCOL_NAME, "feature_schema_version": 1, "split": split, "scenarios": len(index), "rows": offsets[-1]})
-            marker(shard, {"stage": "feature_shard", "split": split, "scenarios": len(index)}); result[split] += len(group)
-    marker(output_root, {"stage": "features", "counts": result, "condition": "nominal"}); return result
+            atomic_json(shard / "metadata.json", {"protocol_name": protocol_name, "config_sha256": config_sha256, "feature_schema_version": 1, "split": split, "scenarios": len(index), "rows": offsets[-1]})
+            marker(shard, {"stage": "feature_shard", "split": split, "scenarios": len(index), "config_sha256": config_sha256}, protocol_name=protocol_name); result[split] += len(group)
+    marker(output_root, {"stage": "features", "counts": result, "condition": "nominal", "config_sha256": config_sha256}, protocol_name=protocol_name); return result

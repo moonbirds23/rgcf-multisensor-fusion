@@ -38,21 +38,21 @@ def _save(path, payload):
     finally:
         if os.path.exists(temp): os.unlink(temp)
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--root",type=Path,required=True); p.add_argument("--method",choices=("posterior_only","pefnet_no_external_evidence","full_pefnet"),required=True); p.add_argument("--model-seed",type=int,required=True); p.add_argument("--epochs",type=int,default=30); p.add_argument("--patience",type=int,default=5); p.add_argument("--batch-size",type=int,default=512); args=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--root",type=Path,required=True); p.add_argument("--artifact-key",default="av2_1000"); p.add_argument("--protocol-name",default="AV2_NOMINAL_1000_V3.1"); p.add_argument("--method",choices=("posterior_only","pefnet_no_external_evidence","full_pefnet"),required=True); p.add_argument("--model-seed",type=int,required=True); p.add_argument("--epochs",type=int,default=30); p.add_argument("--patience",type=int,default=5); p.add_argument("--batch-size",type=int,default=512); args=p.parse_args()
     import torch
-    device=require_cuda(); paths=formal_paths(args.root); train=Av2TimeStepShardDataset(paths["features"] / "train"); valid=Av2TimeStepShardDataset(paths["features"] / "validation")
+    device=require_cuda(); paths=formal_paths(args.root, artifact_key=args.artifact_key); train=Av2TimeStepShardDataset(paths["features"] / "train"); valid=Av2TimeStepShardDataset(paths["features"] / "validation")
     if not len(train) or not len(valid): raise RuntimeError("missing formal train/validation feature rows")
     _seed(args.model_seed); model=_model().to(device); assert next(model.parameters()).is_cuda; opt=torch.optim.Adam(model.parameters(),lr=1e-3)
     loader=lambda ds,shuffle: torch.utils.data.DataLoader(ds,batch_size=args.batch_size,shuffle=shuffle,num_workers=2,pin_memory=True)
     run=paths["runs"] / args.method / ("seed_"+str(args.model_seed)); history=[]; best=float("inf"); stale=0
     for epoch in range(1,args.epochs+1):
         tr=_epoch(model,loader(train,True),device,args.method,opt); va=_epoch(model,loader(valid,False),device,args.method); history.append({"epoch":epoch,"train_loss":tr,"validation_loss":va})
-        metadata={"method":args.method,"model_seed":args.model_seed,"epoch":epoch,"best_validation_loss":min(best,va),"train_manifest_sha256":sha256_file(paths["manifests"] / "train_700.csv"),"validation_manifest_sha256":sha256_file(paths["manifests"] / "val_100.csv"),"torch_version":torch.__version__,"cuda_version":torch.version.cuda}
+        metadata={"method":args.method,"model_seed":args.model_seed,"epoch":epoch,"best_validation_loss":min(best,va),"artifact_key":args.artifact_key,"protocol_name":args.protocol_name,"train_manifest_sha256":sha256_file(paths["manifests"] / "train_700.csv"),"validation_manifest_sha256":sha256_file(paths["manifests"] / "val_100.csv"),"torch_version":torch.__version__,"cuda_version":torch.version.cuda}
         _save(run / "last.pt", {"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"metadata":metadata})
         if va < best: best=va; stale=0; _save(run / "best.pt", {"model_state_dict":model.state_dict(),"metadata":metadata})
         else: stale+=1
         if stale>=args.patience: break
     run.mkdir(parents=True,exist_ok=True)
     with (run/"history.csv").open("w",newline="",encoding="utf-8") as f: w=csv.DictWriter(f,fieldnames=["epoch","train_loss","validation_loss"]);w.writeheader();w.writerows(history)
-    atomic_json(run/"run_manifest.json", {"method":args.method,"model_seed":args.model_seed,"best_validation_loss":best,"strict_cuda":True,"epochs_completed":len(history)}); (run/"_SUCCESS").write_text("ok\n")
+    atomic_json(run/"run_manifest.json", {"method":args.method,"model_seed":args.model_seed,"artifact_key":args.artifact_key,"protocol_name":args.protocol_name,"best_validation_loss":best,"strict_cuda":True,"epochs_completed":len(history)}); (run/"_SUCCESS").write_text("ok\n")
 if __name__=="__main__": main()

@@ -86,8 +86,17 @@ def write_csv(path: Path, rows: Iterable[Mapping[str, Any]], fields: list[str]) 
     os.replace(str(temporary), str(path))
 
 
-def marker(directory: Path, payload: Mapping[str, Any]) -> None:
-    atomic_json(directory / "_SUCCESS", {"protocol_name": PROTOCOL_NAME, "schema_version": SCHEMA_VERSION, **dict(payload)})
+def marker(
+    directory: Path,
+    payload: Mapping[str, Any],
+    *,
+    protocol_name: str = PROTOCOL_NAME,
+    schema_version: int = SCHEMA_VERSION,
+) -> None:
+    atomic_json(
+        directory / "_SUCCESS",
+        {"protocol_name": protocol_name, "schema_version": schema_version, **dict(payload)},
+    )
 
 
 def require_cuda():
@@ -97,15 +106,18 @@ def require_cuda():
     return torch.device("cuda")
 
 
-def formal_paths(root: Path) -> dict[str, Path]:
+def formal_paths(root: Path, artifact_key: str = "av2_1000") -> dict[str, Path]:
     root = root.resolve()
+    if not artifact_key or Path(artifact_key).name != artifact_key:
+        raise ValueError("artifact_key must be one non-empty path component")
     raw = root / "data" / "raw" / "av2_motion_forecasting"
     return {
         "root": root, "raw": raw, "train_raw": raw / "train_candidates", "val_raw": raw / "val_candidates",
         "inventory": root / "data" / "inventory" / "av2_1000",
         "manifests": root / "data" / "manifests" / "av2_1000_v2",
         "truth": root / "data" / "truth_cache" / "av2_1000",
-        "sim": root / "data" / "sim_cache" / "av2_1000",
-        "features": root / "data" / "feature_shards" / "av2_1000",
-        "runs": root / "runs" / "av2_1000", "results": root / "results" / "av2_1000",
+        "sim": root / "data" / "sim_cache" / artifact_key,
+        "features": root / "data" / "feature_shards" / artifact_key,
+        "runs": root / "runs" / artifact_key,
+        "results": root / "results" / artifact_key,
     }

@@ -10,36 +10,8 @@
 4. 不夸大实验结论。没有公平对照、没有同一数据集、没有同一 seed 协议的结果，不能写成正式性能优势。
 5. 不把 smoke test、dry-run、小规模验证写成论文主结果。它们只能用于说明流程跑通或机制初步有效。
 6. 论文表述必须区分“已证明”“实验显示”“初步观察”“推测原因”。不能把推测写成事实。
-
-## 1.1 最终论文版本与论文名称
-
-最终论文版本已经确定为项目内部实现 `ME-RGCF-A0D`。
-
-论文中不直接使用 `ME-RGCF-A0D` 作为主方法名称。该内部名只可在代码实现说明、
-实验复现实验表或附录中作为 implementation name 出现。
-
-论文展示名称确定为：
-
-```text
-EHGCF: Evidence-aware Heterogeneous Graph Calibrated Fusion
-```
-
-中文名称：
-
-```text
-证据感知异构图校准融合方法
-```
-
-名称含义：
-
-| 组成 | 对应论文创新点 |
-|---|---|
-| Evidence-aware | 测量证据与后验信息的共同引入 |
-| Heterogeneous Graph | 面向 P/M 节点的 GNN 异构网络 |
-| Calibrated Fusion | 可靠性门控与协方差尺度校准的信息融合公式 |
-
-后续论文正文、摘要、标题、图表和实验主结果中，统一使用 `EHGCF` 或
-“证据感知异构图校准融合方法”指代最终方法。
+7. 当前论文会在Latex文件中进行撰写，先进行中文版本的撰写，后续会转成英文
+8. 
 
 ## 2. 创新点固定边界
 
@@ -118,22 +90,10 @@ EHGCF: Evidence-aware Heterogeneous Graph Calibrated Fusion
 
 | 内部名称 | 论文角色 |
 |---|---|
-| RGCF | 过程版本；learned baseline 或 evidence pooling/broadcast 消融 |
-| ME-RGCF-A0 | 过程版本；异构 P/M 图但无 pair-level 定向证据的消融 |
-| ME-RGCF-A0D | 最终实现版本；论文中命名为 `EHGCF` |
-| ME-RGCF-A0D-HS | 过程版本；loss 变体、机制分析或补充消融 |
-
-写作约束：
-
-```text
-RGCF、ME-RGCF-A0、ME-RGCF-A0D-HS 均为过程版本。
-它们不能作为论文最终方法，也不能作为创新点名称。
-```
-
-```text
-ME-RGCF-A0D 是最终代码实现名。
-论文中应将其表述为 EHGCF，而不是作为版本名进行叙述。
-```
+| RGCF | learned baseline 或 evidence pooling/broadcast 消融 |
+| ME-RGCF-A0 | 异构 P/M 图但无 pair-level 定向证据的消融 |
+| ME-RGCF-A0D | 当前主方法候选或最终方法 |
+| ME-RGCF-A0D-HS | loss 变体、机制分析或补充消融 |
 
 禁止将内部版本写成：
 
