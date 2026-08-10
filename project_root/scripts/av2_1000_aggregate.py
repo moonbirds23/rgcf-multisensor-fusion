@@ -26,7 +26,7 @@ def main():
  for r in final: lookup[r["method"]][r["scenario_id"]]=r["position_rmse"]
  if "full_pefnet" in lookup:
   rng=np.random.default_rng(20260711)
-  for baseline in ("t1","covariance_intersection","posterior_only","pefnet_no_external_evidence"):
+  for baseline in ("t1","covariance_intersection","ci_eu","centralized_multisensor_ekf","posterior_only","pefnet_no_external_evidence"):
    if baseline not in lookup: continue
    ids=sorted(set(lookup["full_pefnet"]).intersection(lookup[baseline])); diff=np.asarray([lookup["full_pefnet"][i]-lookup[baseline][i] for i in ids])
    boots=np.asarray([diff[rng.integers(0,len(diff),len(diff))].mean() for _ in range(args.bootstrap)])
